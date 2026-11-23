@@ -1,0 +1,55 @@
+pipeline_version: "1.0.0"
+rules_version: "1.0.0"
+
+# intake
+dpi: 150
+max_bytes: 10000000
+max_pages: 10
+max_pixels: 50000000
+
+# verify
+contrast_min: 1.5
+min_ink: 0.02
+ghost_diff_threshold: 40
+ocr_margin: 4
+iou_threshold: 0.30
+fuzzy_threshold: 85
+tiny_font_max_pt: 6.0
+
+# severity weights (added to weighted score)
+weights:
+  injection_strong: 10.0
+  injection_weak: 1.0
+  hidden_text: 8.0
+  low_contrast: 2.0
+  tiny_font: 3.0
+  off_page: 3.0
+  covered_clipped: 4.0
+  zero_width: 3.0
+  mixed_script: 2.0
+  private_use: 4.0
+  garbled: 3.0
+  font_anomaly: 3.0
+  mismatch: 4.0
+  link_mismatch: 3.0
+  not_visible: 8.0
+
+# thresholds
+suspicious_score: 5.0
+# strong injection => QUARANTINED directly, regardless of score
+
+# audit
+audit_rate: 0.05
+
+# injection scan patterns (3.9)
+injection:
+  strong:
+    - "ignore\\s+(all\\s+)?previous\\s+(instructions|directions)"
+    - "disregard\\s+(all\\s+)?previous"
+    - "system\\s*:\\s*you\\s+are"
+    - "reveal\\s+your\\s+system\\s+prompt"
+    - "print\\s+the\\s+system\\s+prompt"
+  weak:
+    - "http://"
+    - "mailto:"
+    - "file://"

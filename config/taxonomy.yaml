@@ -1,0 +1,31 @@
+skills:
+  python:
+    aliases: [python, python3, py]
+    related: [django, flask, fastapi, pandas, numpy]
+  java:
+    aliases: [java, jdk]
+    related: [spring, kotlin, maven, gradle]
+  javascript:
+    aliases: [javascript, js, node, nodejs]
+    related: [typescript, react, vue, express]
+  typescript:
+    aliases: [typescript, ts]
+    related: [javascript, react, angular]
+  sql:
+    aliases: [sql, mysql, postgresql, postgres, sqlite]
+    related: [database, oracle, mongodb]
+  aws:
+    aliases: [aws, amazon web services]
+    related: [ec2, s3, lambda, cloudformation]
+  docker:
+    aliases: [docker, container]
+    related: [kubernetes, k8s, docker-compose]
+  kubernetes:
+    aliases: [kubernetes, k8s]
+    related: [docker, helm, eks]
+  machine_learning:
+    aliases: [machine learning, ml, ai]
+    related: [tensorflow, pytorch, scikit-learn, deep learning]
+  project_management:
+    aliases: [project management, pmp, agile, scrum]
+    related: [jira, confluence]
