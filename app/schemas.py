@@ -122,3 +122,40 @@ class IntakeOutcome(BaseModel):
     uploaded_at: float
     track: Literal["resume", "job_description"]
     quarantine_pointer: Optional[str] = None
+
+
+class ScanResult(BaseModel):
+    """Malware scan result (Section 5.2, scanner daemon)."""
+    sha256: str
+    file_type: str
+    scan_engine: str
+    infected: bool
+    threat_name: Optional[str] = None
+    scanned_at: Optional[str] = None
+    payload: Optional[dict] = None
+
+
+class ScanFinding(BaseModel):
+    """A single threat finding from any scanner stage."""
+    rule_id: str
+    stage: str  # "magic", "zip", "yara", "cdr"
+    severity: str  # "High", "Medium", "Low", "Informational"
+    description: str
+    matched_strings: list[str] = []
+
+
+class SanitizedArtifact(BaseModel):
+    """Output of the CDR pipeline — safe for OCR/LLM consumption (Section 5.2)."""
+    sha256: str
+    raw_sha256: str  # SHA-256 of original upload (immutable, for audit/forensics)
+    file_type: str  # "pdf", "docx", "text"
+    original_size: int
+    sanitized_size: int
+    scan_engine: str
+    infected: bool
+    threat_name: Optional[str] = None
+    findings: list[ScanFinding] = []
+    cdr_applied: bool = False
+    cdr_method: Optional[str] = None
+    sanitized_artifact_uri: Optional[str] = None  # derived artifact storage URI
+    scanned_at: float = 0.0

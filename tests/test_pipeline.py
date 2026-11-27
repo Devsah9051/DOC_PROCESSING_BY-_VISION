@@ -50,6 +50,7 @@ def test_cache_hit_returns_cached(clean_pdf):
     with mock.patch.object(pl, "cache_get", return_value=cached):
         with mock.patch.object(pl, "intake") as intake_mock:
             class Ctx:
+                outcome = "DUPLICATE"
                 cache_hit = True
                 cached_output = cached
             intake_mock.return_value = Ctx()

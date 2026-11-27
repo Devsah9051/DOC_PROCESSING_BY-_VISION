@@ -7,6 +7,22 @@ max_bytes: 10000000
 max_pages: 10
 max_pixels: 50000000
 
+# archive bomb detection (DOCX is a ZIP)
+max_compression_ratio: 100
+max_zip_entries: 10000
+max_pdf_objects: 100000
+
+# malware scanner
+scan_enabled: false
+scan_engine: "yara+cdr"
+scan_poll_interval: 5
+scan_max_attempts: 5
+
+# CDR reconstruction
+cdr_dpi: 200
+cdr_reconstruct_pdf: true
+cdr_reconstruct_docx: true
+
 # verify
 contrast_min: 1.5
 min_ink: 0.02

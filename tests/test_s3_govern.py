@@ -5,7 +5,7 @@ from stages.s3_govern import govern_pre, govern_post
 
 
 def test_govern_pre_clean_proceeds():
-    result = govern_pre("u1", "sha", type("Config", (), {"pipeline_version": "1.0.0", "rules_version": "1.0.0", "weights": {}})())
+    result = govern_pre("u1", "sha", type("Config", (), {"pipeline_version": "1.0.0", "rules_version": "1.0.0", "weights": {}, "scan_enabled": False})())
     assert result["proceed"] is True
 
 

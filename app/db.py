@@ -69,3 +69,217 @@ def audit_insert(upload_id: str, sha256: str, status: str, rules: list, quaranti
                 (upload_id, sha256, status, rules, quarantine_payload),
             )
             conn.commit()
+
+
+# ---- version registry (Section 5.3) ----
+
+def get_version(sha256: str, track: str) -> Optional[tuple[str, int]]:
+    """Return (version_id, version_seq) if a version already exists for (sha256, track)."""
+    with pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT version_id, version_seq FROM version_registry "
+                "WHERE sha256=%s AND track=%s ORDER BY version_seq DESC LIMIT 1",
+                (sha256, track),
+            )
+            row = cur.fetchone()
+            return (row[0], row[1]) if row else None
+
+
+def register_version(sha256: str, track: str, owner: str, version_seq: int, outcome: str) -> bool:
+    """Compare-and-swap register a new version. Returns True if we won the CAS."""
+    version_id = f"{sha256[:16]}:v{version_seq}"
+    with pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO version_registry (version_id, sha256, track, version_seq, owner, outcome) "
+                "VALUES (%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT (sha256, track) DO NOTHING "
+                "RETURNING version_id",
+                (version_id, sha256, track, version_seq, owner, outcome),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return row is not None
+
+
+# ---- transactional outbox (Section 5.3) ----
+
+def outbox_insert(
+    aggregate_type: str,
+    aggregate_id: str,
+    event_type: str,
+    payload: dict,
+    conn=None,
+) -> int:
+    """Insert an outbox entry. If conn is provided, uses that connection (enables same-transaction writes)."""
+    import json
+
+    if conn is not None:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO outbox (aggregate_type, aggregate_id, event_type, payload) "
+                "VALUES (%s,%s,%s,%s) RETURNING id",
+                (aggregate_type, aggregate_id, event_type, json.dumps(payload)),
+            )
+            row = cur.fetchone()
+            return row[0]
+    with pool().connection() as c:
+        with c.cursor() as cur:
+            cur.execute(
+                "INSERT INTO outbox (aggregate_type, aggregate_id, event_type, payload) "
+                "VALUES (%s,%s,%s,%s) RETURNING id",
+                (aggregate_type, aggregate_id, event_type, json.dumps(payload)),
+            )
+            row = cur.fetchone()
+            c.commit()
+            return row[0]
+
+
+def outbox_claim_pending(limit: int = 10) -> list[dict]:
+    """Claim pending outbox entries for processing. Returns claimed rows."""
+    with pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE outbox "
+                "SET status = 'processing', attempts = attempts + 1 "
+                "WHERE id IN ("
+                "    SELECT id FROM outbox "
+                "    WHERE status = 'pending' "
+                "    ORDER BY created_at ASC "
+                "    LIMIT %s FOR UPDATE SKIP LOCKED"
+                ") "
+                "RETURNING id, aggregate_type, aggregate_id, event_type, payload, attempts",
+                (limit,),
+            )
+            rows = cur.fetchall()
+            conn.commit()
+            return [
+                {
+                    "id": r[0],
+                    "aggregate_type": r[1],
+                    "aggregate_id": r[2],
+                    "event_type": r[3],
+                    "payload": r[4] if isinstance(r[4], dict) else __import__("json").loads(r[4]),
+                    "attempts": r[5],
+                }
+                for r in rows
+            ]
+
+
+def outbox_mark_done(outbox_id: int, result_payload: dict | None = None) -> None:
+    """Mark an outbox entry as done, optionally storing a result payload."""
+    import json
+
+    with pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE outbox SET status = 'done', processed_at = NOW(), payload = COALESCE(%s::jsonb, payload) "
+                "WHERE id = %s",
+                (json.dumps(result_payload) if result_payload is not None else None, outbox_id),
+            )
+            conn.commit()
+
+
+def outbox_mark_failed(outbox_id: int, error: str) -> None:
+    """Mark an outbox entry as failed with an error message."""
+    import json
+
+    with pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE outbox SET status = 'failed', processed_at = NOW(), error = %s WHERE id = %s",
+                (error, outbox_id),
+            )
+            conn.commit()
+
+
+# ---- scan results ----
+
+def scan_result_insert(sha256: str, file_type: str, scan_engine: str, infected: bool, threat_name: str | None, payload: dict | None = None) -> None:
+    import json
+
+    with pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO scan_results (sha256, file_type, scan_engine, infected, threat_name, payload) "
+                "VALUES (%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT (sha256) DO UPDATE SET "
+                "  file_type = EXCLUDED.file_type, "
+                "  scan_engine = EXCLUDED.scan_engine, "
+                "  infected = EXCLUDED.infected, "
+                "  threat_name = EXCLUDED.threat_name, "
+                "  scanned_at = NOW(), "
+                "  payload = EXCLUDED.payload",
+                (sha256, file_type, scan_engine, infected, threat_name, json.dumps(payload) if payload else None),
+            )
+            conn.commit()
+
+
+def scan_result_get(sha256: str) -> dict | None:
+    with pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT sha256, file_type, scan_engine, infected, threat_name, scanned_at, payload "
+                "FROM scan_results WHERE sha256 = %s",
+                (sha256,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            import json
+            return {
+                "sha256": row[0],
+                "file_type": row[1],
+                "scan_engine": row[2],
+                "infected": row[3],
+                "threat_name": row[4],
+                "scanned_at": row[5].isoformat() if row[5] else None,
+                "payload": json.loads(row[6]) if row[6] else None,
+            }
+
+
+def scan_result_insert_full(
+    sha256: str,
+    file_type: str,
+    original_size: int,
+    sanitized_size: int,
+    scan_engine: str,
+    infected: bool,
+    threat_name: str | None,
+    findings: list[dict] | None = None,
+    cdr_applied: bool = False,
+    cdr_method: str | None = None,
+    payload: dict | None = None,
+) -> None:
+    import json
+
+    with pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO scan_results (sha256, file_type, scan_engine, infected, threat_name, payload) "
+                "VALUES (%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT (sha256) DO UPDATE SET "
+                "  file_type = EXCLUDED.file_type, "
+                "  scan_engine = EXCLUDED.scan_engine, "
+                "  infected = EXCLUDED.infected, "
+                "  threat_name = EXCLUDED.threat_name, "
+                "  scanned_at = NOW(), "
+                "  payload = EXCLUDED.payload",
+                (
+                    sha256,
+                    file_type,
+                    scan_engine,
+                    infected,
+                    threat_name,
+                    json.dumps({
+                        "original_size": original_size,
+                        "sanitized_size": sanitized_size,
+                        "findings": findings or [],
+                        "cdr_applied": cdr_applied,
+                        "cdr_method": cdr_method,
+                        **(payload or {}),
+                    }),
+                ),
+            )
+            conn.commit()

@@ -4,13 +4,15 @@ import hashlib
 import time
 from typing import Optional
 
+import pymupdf
+
 from app.config import config
 from app.db import cache_get, cache_insert, audit_insert
 from app.hash import original_sha256, block_hash, clean_hash, record_hash, norm_hash, state_hash, idem_hash
 from app.log import append_log
 from app.schemas import (
     Phase1Output, Verdict, FileState, Finding, Status,
-    IntakeOutcome, BlockRecord,
+    IntakeOutcome, BlockRecord, SanitizedArtifact, ScanFinding,
 )
 from app.seal import seal_fields
 from stages.s1_intake import intake, Stage1Error
@@ -86,13 +88,83 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
     try:
         ctx = intake(file_bytes, filename, upload_id, config)
         record("stage1_intake", t0)
-        if ctx.cache_hit:
+
+        if ctx.outcome == "DUPLICATE":
             # Cache hit: return stored result (Section 12.4)
+            if ctx.cached_output is not None:
+                try:
+                    return Phase1Output.model_validate(ctx.cached_output)
+                except Exception:
+                    pass
+            # Cache hit but cached output invalid → REJECTED
+            out = _failed_output(sha256, "intake: cache_hit_invalid", timings_ms)
+            out.report_hash = hashlib.sha256(json_dumps(out.model_dump()).encode()).hexdigest()
+            out.signature = seal_fields(out.report_hash, "", versions)
             try:
-                return Phase1Output.model_validate(ctx.cached_output)
+                audit_insert(upload_id, sha256, "FAILED", ["CACHE_INVALID"], str(out.model_dump()))
             except Exception:
                 pass
+            return out
+
+        if ctx.outcome != "READY":
+            # Non-READY outcome: return appropriate terminal output
+            if ctx.outcome == "BLOCKED":
+                # Security issue → QUARANTINE (not a bug)
+                out = Phase1Output(
+                    sections=[], tokens=[],
+                    verdict=Verdict(status="QUARANTINE", score=10.0, rules=["INTAKE_BLOCKED"], reasons=[ctx.reason]),
+                    versions=versions, timings_ms=timings_ms, prev_hash=sha256,
+                    report_hash="", signature="",
+                )
+            else:
+                # REJECTED / EXPIRED / FAILED → FAILED (programming or validation error)
+                out = _failed_output(sha256, f"intake: {ctx.reason}", timings_ms)
+            out.report_hash = hashlib.sha256(json_dumps(out.model_dump()).encode()).hexdigest()
+            out.signature = seal_fields(out.report_hash, "", versions)
+            try:
+                audit_insert(upload_id, sha256, out.verdict.status, [ctx.reason], str(out.model_dump()))
+            except Exception:
+                pass
+            return out
+
         doc = ctx.doc
+
+        # Stage 1 already ran synchronous scan + CDR (Section 5.2).
+        # Use the sanitized artifact and scan findings directly.
+        sanitized_artifact = ctx.sanitized_artifact
+        scan_findings = ctx.scan_findings
+
+        # Non-READY outcome from scanner (infected file → BLOCKED → QUARANTINE)
+        if ctx.outcome == "BLOCKED":
+            out = Phase1Output(
+                sections=[], tokens=[],
+                verdict=Verdict(status="QUARANTINE", score=10.0, rules=["SCAN_INFECTED"], reasons=[ctx.reason]),
+                versions=versions, timings_ms=timings_ms, prev_hash=sha256,
+                report_hash="", signature="",
+            )
+            out.report_hash = hashlib.sha256(json_dumps(out.model_dump()).encode()).hexdigest()
+            out.signature = seal_fields(out.report_hash, "", versions)
+            try:
+                audit_insert(upload_id, sha256, "QUARANTINE", ["SCAN_INFECTED"], str(out.model_dump()))
+            except Exception:
+                pass
+            try:
+                if doc is not None:
+                    doc.close()
+            except Exception:
+                pass
+            return out
+
+        # Conditional CDR: if CDR was applied, reopen document from sanitized bytes.
+        # If CDR was not applied, keep the original doc (text layer intact for fast path).
+        if sanitized_artifact.cdr_applied and sanitized_artifact.sanitized_bytes:
+            try:
+                if doc is not None:
+                    doc.close()
+                doc = pymupdf.open(stream=sanitized_artifact.sanitized_bytes, filetype="pdf")
+            except Exception:
+                # If reopening fails, fall back to original doc (may still be usable)
+                pass
     except Stage1Error as exc:
         record("stage1_intake", t0)
         out = _failed_output(sha256, f"intake: {exc}", timings_ms)
@@ -114,10 +186,32 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
             pass
         return out
 
+    # Non-PDF files accepted by Stage 1 but Stage 2 verify requires a pymupdf doc
+    if doc is None:
+        out = _failed_output(sha256, f"intake: file_type_not_supported_by_verify", timings_ms)
+        out.report_hash = hashlib.sha256(json_dumps(out.model_dump()).encode()).hexdigest()
+        out.signature = seal_fields(out.report_hash, "", versions)
+        try:
+            audit_insert(upload_id, sha256, "FAILED", ["UNSUPPORTED_FILE_TYPE"], str(out.model_dump()))
+        except Exception:
+            pass
+        return out
+
     # ---- Stage 3 pre-gate (before parsing) ----
     t0 = _now_ms()
     try:
-        pre_result = govern_pre(upload_id, sha256, config)
+        # Convert ScanFinding dataclasses to dicts for govern_pre
+        scan_findings_dicts = [
+            {
+                "rule_id": f.rule_id,
+                "stage": f.stage,
+                "severity": f.severity,
+                "description": f.description,
+                "matched_strings": f.matched_strings,
+            }
+            for f in (ctx.scan_findings or [])
+        ]
+        pre_result = govern_pre(upload_id, sha256, config, scan_findings_dicts)
         record("stage3_pre_gate", t0)
         if not pre_result["proceed"]:
             out = _failed_output(sha256, pre_result["reason"], timings_ms)
@@ -162,7 +256,19 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
         quarantine_payload = None
         if verdict.status == "QUARANTINE":
             quarantine_payload = json_dumps({"flags": flags, "verdict": verdict.model_dump()})
-        post_result = govern_post(upload_id, sha256, verdict, quarantine_payload)
+        post_result = govern_post(upload_id, sha256, verdict, quarantine_payload,
+            scan_findings=[
+                {
+                    "rule_id": f.rule_id,
+                    "stage": f.stage,
+                    "severity": f.severity,
+                    "description": f.description,
+                    "matched_strings": f.matched_strings,
+                }
+                for f in (ctx.scan_findings or [])
+            ],
+            cdr_applied=sanitized_artifact.cdr_applied if sanitized_artifact else False,
+        )
         record("stage3_post_gate", t0)
         if not post_result["proceed"]:
             # QUARANTINE is a legitimate outcome (Section 11), not a bug

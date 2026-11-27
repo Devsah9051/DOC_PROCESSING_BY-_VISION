@@ -28,12 +28,23 @@
 | 23 | `tests/test_pipeline.py` | Updated: status names, QUARANTINE→FAILED for errors | DONE |
 | 24 | `tests/test_s2_verify.py` | Updated: status names, verdict thresholds | DONE |
 | 25 | `tests/test_s3_govern.py` | Updated: govern_pre/govern_post dict return | DONE |
+| 26 | `app/scanner.py` | NEW: 4-stage scanner (magic-byte, zip-bomb, yara, CDR) replacing clamav daemon | DONE |
+| 27 | `app/schemas.py` | Added ScanFinding, SanitizedArtifact models | DONE |
+| 28 | `stages/s1_intake.py` | Integrated synchronous scan + CDR; added sanitized_artifact/scan_findings | DONE |
+| 29 | `tests/test_scanner.py` | NEW: 17 scanner tests | DONE |
+| 30 | `app/scanner.py` | Conditional CDR: clean files skip CDR, targeted sanitization for medium findings | DONE |
+| 31 | `app/pipeline.py` | Reopen doc from sanitized_bytes when cdr_applied=True; keep original when False | DONE |
+| 32 | `stages/s3_govern.py` | govern_post accepts cdr_applied flag, adds CDR_APPLIED finding | DONE |
+| 33 | `tests/test_scanner.py` | Added conditional CDR tests (clean text passthrough, text with external links) | DONE |
+| 34 | `app/scanner.py` | Edge case fixes: encryption detection, structural parse check, raw_sha256, refined YARA severity (High/Medium) | DONE |
+| 35 | `app/schemas.py` | Added raw_sha256, sanitized_artifact_uri to SanitizedArtifact | DONE |
+| 36 | `tests/test_scanner.py` | Added raw_sha256 preserved, structural invalid, external_link medium tests | DONE |
 
 ## Test Status
 | Metric | Value |
 |--------|-------|
-| Total tests | 41 |
-| Passed | 41 |
+| Total tests | 84 |
+| Passed | 84 |
 | Failed | 0 |
 | Command | `DATABASE_URL=postgresql://postgres:password@localhost:5432/egca PYTHONPATH=. .venv/bin/pytest` |
 
@@ -42,6 +53,9 @@
 |------|--------|-------|
 | Python 3.11 venv at `.venv/` | DONE | `python3 -m venv .venv && .venv/bin/pip install uv` |
 | Dependencies synced via `uv sync` | DONE | `pyproject.toml` deps installed |
+| yara-python installed | DONE | `.venv/bin/pip install yara-python` |
+| pikepdf installed | DONE | `.venv/bin/pip install pikepdf` |
+| defusedxml installed | DONE | `.venv/bin/pip install defusedxml` |
 | Docker PostgreSQL setup script | DONE | `scripts/setup_docker_postgres.sh` - starts postgres:16-alpine container, initializes schema, writes `.env` |
 | `.env` created with DATABASE_URL + SEAL_KEY | DONE | Ed25519 key generated |
 | FastAPI `/health` verified | DONE | Returns `{"status": "ok", "pipeline_version": "1.0.0"}` |
@@ -51,6 +65,7 @@
 |------|------|--------|---------------|
 | Stage 4.2 Latest-version check | `stages/s3_govern.py` | STUB | Wire to external service when spec fields exist |
 | Stage 4.3 Job-open check | `stages/s3_govern.py` | STUB | Wire to external service when spec fields exist |
+| Malware scanner daemon | `app/scanner.py` | DONE | Synchronous yara+cdr pipeline in Stage 1; scan_enabled defaults to false |
 
 ## Database Maintenance
 | Task | Command | Frequency |
@@ -71,6 +86,7 @@
 | Purpose | Command |
 |---------|---------|
 | Run tests | `DATABASE_URL=postgresql://postgres:password@localhost:5432/egca PYTHONPATH=. .venv/bin/pytest` |
+| Install yara-python | `.venv/bin/pip install yara-python` |
 | Run server | `DATABASE_URL=... SEAL_KEY=... PYTHONPATH=. .venv/bin/python -m uvicorn app.main:app` |
 | Init DB | `DATABASE_URL=... .venv/bin/python scripts/init_db.py` |
 | TTL cleanup | `DATABASE_URL=... .venv/bin/python scripts/init_db.py --cleanup` |

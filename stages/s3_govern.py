@@ -55,7 +55,7 @@ def compute_suspicion(findings: list[Finding]) -> tuple[float, str, list[str]]:
     return total, tier, rule_ids
 
 
-def govern_pre(upload_id: str, sha256: str, config) -> dict:
+def govern_pre(upload_id: str, sha256: str, config, scan_findings: list | None = None) -> dict:
     """Stage 3 pre-gate (Section 7.2).
 
     Runs before any parsing. Decides whether this version should continue.
@@ -80,6 +80,24 @@ def govern_pre(upload_id: str, sha256: str, config) -> dict:
         })
         return {"proceed": False, "reason": "cached_result_reused"}
 
+    # Consider Stage 1 scan findings (synchronous scan + CDR already applied)
+    # High-severity findings already blocked at Stage 1 (BLOCKED → QUARANTINE).
+    # Medium-severity findings → REVIEW tier.
+    review_findings = []
+    if scan_findings:
+        for f in scan_findings:
+            if f.get("severity") == "Medium":
+                review_findings.append(f)
+    if review_findings:
+        append_log("GATE_DECISION", {
+            "upload_id": upload_id,
+            "sha256": sha256,
+            "decision": "PRE_GATE_REVIEW",
+            "review_findings": [f["rule_id"] for f in review_findings],
+            "idem_key": idem_key,
+        })
+        return {"proceed": True, "reason": "pre_gate_review", "review_findings": review_findings}
+
     # Epoch fencing / state watcher (stubs - wire to external services per spec)
     # version_seq fencing: if newer version accepted, older → SUPERSEDED
     # state watcher: JOB_CLOSED / APPLICATION_WITHDRAWN → ARCHIVED_INACTIVE
@@ -99,6 +117,8 @@ def govern_post(
     sha256: str,
     verdict: Verdict,
     quarantine_payload: Optional[str] = None,
+    scan_findings: list | None = None,
+    cdr_applied: bool = False,
 ) -> dict:
     """Stage 3 post-gate (Section 7.2).
 
@@ -117,6 +137,24 @@ def govern_post(
     for rule_id in verdict.rules:
         sev = "High" if rule_id == "INJECTION_STRONG" else "Medium"
         findings.append(Finding(rule_id=rule_id, evidence=verdict.reasons[0] if verdict.reasons else "", severity=sev))
+
+    # Incorporate Stage 1 scan findings (YARA, CDR, etc.) into suspicion rating
+    if scan_findings:
+        for f in scan_findings:
+            sev = f.get("severity", "Medium")
+            findings.append(Finding(
+                rule_id=f.get("rule_id", "SCAN_FINDING"),
+                evidence=f.get("description", ""),
+                severity=sev,
+            ))
+
+    # CDR applied means Stage 1 found medium-severity issues that required sanitization
+    if cdr_applied:
+        findings.append(Finding(
+            rule_id="CDR_APPLIED",
+            evidence="Stage 1 applied CDR sanitization due to YARA findings",
+            severity="Medium",
+        ))
 
     # Suspicion rating (Section 7.4)
     total, tier, rule_ids = compute_suspicion(findings)
