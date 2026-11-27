@@ -69,8 +69,8 @@ def test_ghost_diff_not_visible():
 
 def test_contrast_low():
     # white text on white background => low contrast
-    crop = np.full((20, 20, 3), 255, dtype=np.uint8)
     import numpy as np
+    crop = np.full((20, 20, 3), 255, dtype=np.uint8)
 
     res = contrast(0xFFFFFF, crop)
     assert res.low_contrast is True
@@ -85,7 +85,7 @@ def test_classify_verified():
     tw = [{"word_id": "w1", "page": 1, "bbox": (0, 0, 100, 20), "text": "hello", "visible": True, "flags": []}]
     ocr = [OcrBox(page=1, bbox=[0, 0, 100, 20], text="hello", confidence=0.99)]
     matched, unmatched = classify_text_layer(tw, ocr)
-    assert matched[0].classification == "VERIFIED"
+    assert matched[0].classification == "CORROBORATED"
     assert unmatched == []
 
 
@@ -99,19 +99,19 @@ def test_classify_ocr_only():
 def test_classify_text_only():
     tw = [{"word_id": "w1", "page": 1, "bbox": (0, 0, 100, 20), "text": "ghostword", "visible": True, "flags": []}]
     matched, unmatched = classify_text_layer(tw, [])
-    assert matched[0].classification == "TEXT_ONLY"
+    assert matched[0].classification == "TEXT_SOURCE"
 
 
 def test_compute_verdict_strong_injection():
     v = compute_verdict([], strong_injection=True, weak_score=0.0, weights={})
-    assert v.status == "QUARANTINED"
+    assert v.status == "QUARANTINE"
 
 
 def test_compute_verdict_suspicious():
     v = compute_verdict([("HIDDEN_TEXT", "e", "high")], strong_injection=False, weak_score=0.0, weights={"HIDDEN_TEXT": 8.0})
-    assert v.status == "SUSPICIOUS"
+    assert v.status == "QUARANTINE"
 
 
 def test_compute_verdict_clean():
     v = compute_verdict([("TINY_FONT", "e", "medium")], strong_injection=False, weak_score=0.0, weights={"TINY_FONT": 3.0})
-    assert v.status == "CLEAN"
+    assert v.status == "REVIEW"

@@ -55,7 +55,6 @@ def extract_structure(clean_text: str, word_records) -> Tuple[List[Section], Lis
     lines = [ln.strip() for ln in clean_text.splitlines() if ln.strip()]
     sections: List[Section] = []
     current: Optional[Section] = None
-    used_word_ids: set = set()
 
     for idx, ln in enumerate(lines):
         ln_l = ln.lower()
@@ -68,7 +67,7 @@ def extract_structure(clean_text: str, word_records) -> Tuple[List[Section], Lis
             if current:
                 sections.append(current)
             current = Section(name=alias, text=ln, start_line=idx, end_line=idx)
-            wid, bbox = _find_word_id(word_records, ln, used_word_ids)
+            wid, bbox = _find_word_id(word_records, ln, set())
             if wid:
                 current.word_ids.append(wid)
                 current.bbox = bbox
@@ -76,7 +75,7 @@ def extract_structure(clean_text: str, word_records) -> Tuple[List[Section], Lis
             if current is not None:
                 current.text += " " + ln
                 current.end_line = idx
-                wid, _ = _find_word_id(word_records, ln, used_word_ids)
+                wid, _ = _find_word_id(word_records, ln, set())
                 if wid:
                     current.word_ids.append(wid)
     if current:
@@ -84,6 +83,7 @@ def extract_structure(clean_text: str, word_records) -> Tuple[List[Section], Lis
 
     # 5.2 Fields
     fields: List[Field] = []
+    used_word_ids: set = set()
     for m in EMAIL_RE.finditer(clean_text):
         wid, bbox = _find_word_id(word_records, m.group(0), used_word_ids)
         fields.append(Field(name="email", value=m.group(0), word_ids=[wid] if wid else [], bbox=bbox))

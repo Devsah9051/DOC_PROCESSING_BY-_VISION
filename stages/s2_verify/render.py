@@ -50,7 +50,7 @@ def make_text_erased(doc: pymupdf.Document, page_num: int, dpi: int) -> ErasedRe
                 if not text.strip():
                     continue
                 r = pymupdf.Rect(span["bbox"])
-                page.add_redact_rect(r, fill=(1, 1, 1))
+                page.add_redact_annot(r, fill=(1, 1, 1))
     page.apply_redactions(
         images=PDF_REDACT_IMAGE_NONE,
         graphics=PDF_REDACT_GRAPHICS_NONE,
@@ -97,7 +97,10 @@ def wcag_ratio(color1, color2) -> float:
 
 
 def _int_color(int_color) -> Tuple[int, int, int]:
-    value = int(int_color) & 0xFFFFFF
+    if isinstance(int_color, (list, tuple)):
+        value = (int(int_color[0]) << 16) | (int(int_color[1]) << 8) | int(int_color[2])
+    else:
+        value = int(int_color) & 0xFFFFFF
     return (value >> 16, (value >> 8) & 0xFF, value & 0xFF)
 
 

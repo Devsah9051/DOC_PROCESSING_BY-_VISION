@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -29,12 +30,14 @@ def verify(payload: bytes, signature_b64: str, public_key_b64: str) -> bool:
         return False
 
 
-def seal_fields(prev_hash: str, report_hash: str, versions: dict) -> str:
-    """Sign a deterministic canonical string; return base64 signature."""
-    import json
-
+def seal_fields(stage5_root: str, file_state_hash: str, versions: dict) -> str:
+    """Sign a deterministic canonical string over stage5_root + file_state_hash + versions.
+    
+    Per Section 4.2: the seal covers stage5_root and file_state_hash, signed with
+    the Ed25519 key, recording a key id for rotation.
+    """
     payload = json.dumps(
-        {"prev_hash": prev_hash, "report_hash": report_hash, "versions": versions},
+        {"stage5_root": stage5_root, "file_state_hash": file_state_hash, "versions": versions},
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")

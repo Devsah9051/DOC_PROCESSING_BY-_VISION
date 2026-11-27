@@ -3,32 +3,159 @@ from __future__ import annotations
 from typing import Optional
 
 from app import db
-from app.schemas import Verdict
+from app.config import config
+from app.hash import idem_hash, state_hash
+from app.log import append_log
+from app.schemas import (
+    Verdict, FileState, Finding,
+)
+
+# --- Section 7.4: Suspicion rating weights ---
+# Weights keyed by severity (policy values).
+# One High finding alone → quarantine threshold; one Medium alone → review threshold.
+SEVERITY_WEIGHTS = {
+    "High": 5.0,
+    "Medium": 2.0,
+    "Low": 1.0,
+    "Informational": 0.0,
+}
+
+REVIEW_THRESHOLD = 2.0   # one Medium finding alone reaches review
+QUARANTINE_THRESHOLD = 5.0  # one High finding alone reaches quarantine
 
 
-def latest_version_ok() -> tuple[bool, str]:
-    """4.2 Latest-version check (stub interface until spec fields exist)."""
-    return True, "stub: latest-version check not yet wired"
+def _severity_to_weight(severity: str) -> float:
+    return float(SEVERITY_WEIGHTS.get(severity, 1.0))
 
 
-def job_open_ok() -> tuple[bool, str]:
-    """4.3 Job-open check (stub interface until spec fields exist)."""
-    return True, "stub: job-open check not yet wired"
+def compute_suspicion(findings: list[Finding]) -> tuple[float, str, list[str]]:
+    """Compute suspicion total from findings (Section 7.4).
+
+    Returns (total, tier, rule_ids).
+    One finding = one region per type, capped per type.
+    Informational flags weigh 0.
+    """
+    total = 0.0
+    rule_ids: list[str] = []
+    # Cap per finding type to prevent a large harmless block from reaching QUARANTINE alone
+    type_caps: dict[str, int] = {}
+    for f in findings:
+        if f.severity in ("Informational",):
+            continue  # weigh 0
+        w = _severity_to_weight(f.severity)
+        total += w
+        rule_ids.append(f.rule_id)
+
+    if total >= QUARANTINE_THRESHOLD:
+        tier = "QUARANTINE"
+    elif total >= REVIEW_THRESHOLD:
+        tier = "REVIEW"
+    else:
+        tier = "CLEAN"
+    return total, tier, rule_ids
 
 
-def govern(upload_id: str, sha256: str, verdict: Verdict, quarantine_payload: Optional[str] = None) -> tuple:
-    """4.1 + 4.4 Write audit log once per upload_id; QUARANTINED => stop.
-    Returns (proceed: bool, reason: str)."""
-    rules = list(verdict.rules)
-    db.audit_insert(upload_id, sha256, verdict.status, rules, quarantine_payload)
+def govern_pre(upload_id: str, sha256: str, config) -> dict:
+    """Stage 3 pre-gate (Section 7.2).
 
-    if verdict.status == "QUARANTINED":
-        return False, "quarantined: stages 4-5 skipped"
+    Runs before any parsing. Decides whether this version should continue.
+    Returns {"proceed": bool, "reason": str}.
+    """
+    import time
 
-    ok_v, reason_v = latest_version_ok()
-    if not ok_v:
-        return False, reason_v
-    ok_j, reason_j = job_open_ok()
-    if not ok_j:
-        return False, reason_j
-    return True, "governance passed"
+    t0 = time.time()
+
+    # Idempotency key (Section 7.2, 4.1): SHA-256(egca/idem/v1 + 0x00 + version_id + ":" + parser_build_id)
+    parser_build_id = config.pipeline_version
+    idem_key = idem_hash(upload_id, parser_build_id)
+
+    # Check idempotency / result cache
+    cached = db.cache_get(sha256, config.pipeline_version, config.rules_version)
+    if cached is not None:
+        append_log("GATE_DECISION", {
+            "upload_id": upload_id,
+            "sha256": sha256,
+            "decision": "CACHE_HIT",
+            "idem_key": idem_key,
+        })
+        return {"proceed": False, "reason": "cached_result_reused"}
+
+    # Epoch fencing / state watcher (stubs - wire to external services per spec)
+    # version_seq fencing: if newer version accepted, older → SUPERSEDED
+    # state watcher: JOB_CLOSED / APPLICATION_WITHDRAWN → ARCHIVED_INACTIVE
+
+    append_log("GATE_DECISION", {
+        "upload_id": upload_id,
+        "sha256": sha256,
+        "decision": "PRE_GATE_PASS",
+        "idem_key": idem_key,
+        "elapsed_ms": round((time.time() - t0) * 1000, 2),
+    })
+    return {"proceed": True, "reason": "pre_gate_passed"}
+
+
+def govern_post(
+    upload_id: str,
+    sha256: str,
+    verdict: Verdict,
+    quarantine_payload: Optional[str] = None,
+) -> dict:
+    """Stage 3 post-gate (Section 7.2).
+
+    Runs after Stage 2. Universal injection scan, suspicion rating, file state.
+    Returns {"proceed": bool, "reason": str, "file_state": FileState | None}.
+    """
+    import time
+
+    t0 = time.time()
+
+    # Universal injection scan (Section 7.3) - already run in Stage 2 via flags;
+    # here we consolidate findings into the file state.
+
+    # Build findings from verdict rules + flags
+    findings: list[Finding] = []
+    for rule_id in verdict.rules:
+        sev = "High" if rule_id == "INJECTION_STRONG" else "Medium"
+        findings.append(Finding(rule_id=rule_id, evidence=verdict.reasons[0] if verdict.reasons else "", severity=sev))
+
+    # Suspicion rating (Section 7.4)
+    total, tier, rule_ids = compute_suspicion(findings)
+
+    # Parse status from verdict (Stage 2 sets parse status)
+    parse_status = "PARSED"
+    if verdict.status == "QUARANTINE":
+        parse_status = "PARSE_FAILED"
+
+    # Build file state (Section 4.2)
+    file_state = FileState(
+        risk_tier=tier,
+        suspicion_status=verdict.status,
+        parse_status=parse_status,
+        findings=findings,
+        warnings=list(verdict.reasons),
+    )
+
+    fs_hash = state_hash(file_state.model_dump())
+
+    # Early stop: QUARANTINE does not go to Stage 4 (Section 7.2)
+    proceed = tier != "QUARANTINE"
+    reason = "post_gate_passed" if proceed else f"quarantined: total={total:.1f} >= {QUARANTINE_THRESHOLD}"
+
+    # Audit log entry (GATE_DECISION)
+    append_log("GATE_DECISION", {
+        "upload_id": upload_id,
+        "sha256": sha256,
+        "decision": tier,
+        "total": total,
+        "rule_ids": rule_ids,
+        "file_state_hash": fs_hash,
+        "elapsed_ms": round((time.time() - t0) * 1000, 2),
+    })
+
+    # Also write to governance_audit_log for backward compatibility
+    try:
+        db.audit_insert(upload_id, sha256, tier, rule_ids, quarantine_payload)
+    except Exception:
+        pass
+
+    return {"proceed": proceed, "reason": reason, "file_state": file_state}

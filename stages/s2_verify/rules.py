@@ -8,7 +8,7 @@ import pymupdf
 
 from app.config import config
 
-ZERO_WIDTH = "\u200b\u200c\u200d\ufeff"
+ZERO_WIDTH = "\u200b\u200c\u200d\ufeff\u00b7"
 BIDI_MARKS = "\u200e\u200f"
 TAG_START = 0xE0000
 TAG_END = 0xE0FFF
@@ -114,13 +114,29 @@ def cheap_rules(word: dict, page_rect: pymupdf.Rect, page) -> List[RuleFlag]:
     # invisible render mode (text rendering mode 3 = invisible)
     rend = word.get("render_mode")
     if rend is None:
-        rend = _render_mode_from_flags(int(word.get("flags", 0)))
+        flags_val = word.get("flags", 0)
+        rend = _render_mode_from_flags(int(flags_val) if not isinstance(flags_val, (list, tuple)) else 0)
     if rend == 3 and text.strip():
         flags.append(RuleFlag("INVISIBLE_RENDER_MODE", "render_mode=invisible", "high"))
 
     # off-page bbox
     if not page_rect.contains(bbox):
         flags.append(RuleFlag("OFF_PAGE", f"bbox={bbox}", "medium"))
+
+    # covered by drawn shape (white rect over text, etc.)
+    try:
+        drawings = page.get_drawings() or []
+        for drawing in drawings:
+            d_rect = drawing.get("rect")
+            if d_rect:
+                inter = d_rect & bbox
+                if not inter.is_empty:
+                    fill = drawing.get("fill")
+                    if fill is not None:
+                        flags.append(RuleFlag("COVERED_BY_SHAPE", f"covered by fill={fill}", "medium"))
+                        break
+    except Exception:
+        pass
 
     # zero-width / bidi / tag chars
     if _has_zero_width(text):

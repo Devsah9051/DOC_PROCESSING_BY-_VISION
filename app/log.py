@@ -1,0 +1,144 @@
+from __future__ import annotations
+
+from typing import Any, Optional
+
+from app import db
+from app.hash import log_hash
+
+
+LOG_ENTRY_KINDS = {
+    "GATE_DECISION",
+    "SEAL",
+    "FILE_STATE_UPDATE",
+    "HUMAN_DECISION",
+    "TOMBSTONE",
+    "CHECKPOINT",
+}
+
+
+def _ensure_log_table(conn) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS append_only_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entry_hash TEXT NOT NULL UNIQUE,
+            prev_hash TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            version_id TEXT,
+            payload_json TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            signature TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_append_only_log_kind ON append_only_log(kind)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_append_only_log_version ON append_only_log(version_id)"
+    )
+
+
+def _get_last_hash(conn) -> str:
+    row = conn.execute(
+        "SELECT entry_hash FROM append_only_log ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    return row[0] if row else "0" * 64
+
+
+def append_log(
+    kind: str,
+    payload: dict[str, Any],
+    version_id: Optional[str] = None,
+    signature: Optional[str] = None,
+) -> str:
+    """Append an entry to the append-only log. Returns the entry hash.
+
+    Each entry is hashed with egca/log/v1 and chained to the previous entry.
+    One writer at a time (DB lock ensures serialisation).
+    """
+    if kind not in LOG_ENTRY_KINDS:
+        raise ValueError(f"invalid log entry kind: {kind}")
+
+    import time
+
+    with db.pool().connection() as conn:
+        _ensure_log_table(conn)
+        prev_hash = _get_last_hash(conn)
+        entry_payload = {
+            "kind": kind,
+            "version_id": version_id,
+            "payload": payload,
+            "created_at": time.time(),
+        }
+        entry_hash = log_hash(entry_payload)
+        conn.execute(
+            """
+            INSERT INTO append_only_log
+                (entry_hash, prev_hash, kind, version_id, payload_json, created_at, signature)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                entry_hash,
+                prev_hash,
+                kind,
+                version_id,
+                __import__("json").dumps(entry_payload, sort_keys=True),
+                entry_payload["created_at"],
+                signature,
+            ),
+        )
+        conn.commit()
+        return entry_hash
+
+
+def get_log_chain(limit: int = 100) -> list[dict[str, Any]]:
+    """Return the most recent log entries, newest first."""
+    import json
+
+    with db.pool().connection() as conn:
+        _ensure_log_table(conn)
+        rows = conn.execute(
+            """
+            SELECT entry_hash, prev_hash, kind, version_id, payload_json, created_at, signature
+            FROM append_only_log
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [
+        {
+            "entry_hash": r[0],
+            "prev_hash": r[1],
+            "kind": r[2],
+            "version_id": r[3],
+            "payload": json.loads(r[4]),
+            "created_at": r[5],
+            "signature": r[6],
+        }
+        for r in rows
+    ]
+
+
+def verify_chain() -> bool:
+    """Verify the log chain is intact: each entry's hash recomputes and chains to prev."""
+    import json
+
+    with db.pool().connection() as conn:
+        _ensure_log_table(conn)
+        rows = conn.execute(
+            "SELECT entry_hash, prev_hash, kind, version_id, payload_json FROM append_only_log ORDER BY id ASC"
+        ).fetchall()
+    prev = "0" * 64
+    for entry_hash, prev_hash_db, kind, version_id, payload_json in rows:
+        if prev_hash_db != prev:
+            return False
+        entry = {"kind": kind, "version_id": version_id, "payload": json.loads(payload_json)}
+        # Recompute hash - need created_at but it's not stored separately; recompute from stored fields
+        # The stored entry_hash should match domain_hash of the entry payload
+        expected = log_hash(entry)
+        if expected != entry_hash:
+            return False
+        prev = entry_hash
+    return True

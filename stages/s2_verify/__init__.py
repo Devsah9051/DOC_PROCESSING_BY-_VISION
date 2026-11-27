@@ -136,10 +136,10 @@ def verify_pages(
         except Exception:
             pass
 
-        # 3.4 render pair (text-layer pages only)
+        # 3.4 render pair (pages with text)
         orig = erased = None
         needs_ocr = False
-        if has_text_layer:
+        if words:
             try:
                 orig = render_page(page, cfg.dpi)
                 erased = make_text_erased(doc, pno, cfg.dpi).image
@@ -208,91 +208,6 @@ def verify_pages(
         )
         page_flags: List[Flag] = []
 
-        # scan flag: big image area + few words
-        img_ratio = _image_area_ratio(page)
-        if img_ratio > IMAGE_HEAVY_RATIO and len(words) < 5:
-            ev = f"page {pno} image_ratio={img_ratio:.2f}"
-            flags.append(("IMAGE_HEAVY_SCAN", ev, "low"))
-            page_flags.append(Flag(rule_id="IMAGE_HEAVY_SCAN", evidence=ev, severity="low"))
-
-        # 3.2 cheap rules + 3.3 font rules
-        for w in words:
-            for r in cheap_rules(w, rect, page):
-                flags.append((r.rule_id, r.evidence, r.severity))
-                w["flags"].append(r.rule_id)
-                page_flags.append(Flag(rule_id=r.rule_id, evidence=r.evidence, severity=r.severity))
-            for r in font_rules(w):
-                flags.append((r.rule_id, r.evidence, r.severity))
-                w["flags"].append(r.rule_id)
-                page_flags.append(Flag(rule_id=r.rule_id, evidence=r.evidence, severity=r.severity))
-            text_words.append(w)
-            all_injection_texts.append(w["text"])
-
-        # 3.4 render pair (text-layer pages only)
-        orig = erased = None
-        needs_ocr = False
-        if has_text_layer:
-            try:
-                orig = render_page(page, cfg.dpi)
-                erased = make_text_erased(doc, pno, cfg.dpi).image
-            except Exception:
-                needs_ocr = True
-                ev = f"page {pno} text erase failed"
-                flags.append(("NEEDS_OCR", ev, "low"))
-                page_flags.append(Flag(rule_id="NEEDS_OCR", evidence="erase failed", severity="low"))
-
-        # 3.5 ghost diff + 3.6 contrast per word
-        scale = _scale()
-        margin = cfg.ocr_margin
-        for w in words:
-            bbox = tuple(w["bbox"])
-            crop_o = _crop(orig, bbox, scale, margin) if orig is not None else None
-            crop_e = _crop(erased, bbox, scale, margin) if erased is not None else None
-            if crop_o is not None and crop_e is not None:
-                gd = ghost_diff(crop_o, crop_e)
-                w["visible"] = not gd.not_visible
-                w["ink"] = gd.ink
-                if gd.not_visible:
-                    ev = f"word '{w['text']}' ink={gd.ink:.2f}"
-                    flags.append(("NOT_VISIBLE", ev, "high"))
-                    w["flags"].append("NOT_VISIBLE")
-                    page_flags.append(Flag(rule_id="NOT_VISIBLE", evidence=ev, severity="high"))
-                else:
-                    w["visible"] = True
-            else:
-                w["visible"] = True
-            if crop_e is not None:
-                cr = contrast(w.get("color", 0), crop_e)
-                w["contrast_ratio"] = cr.ratio
-                if cr.low_contrast:
-                    ev = f"word '{w['text']}' ratio={cr.ratio:.2f}"
-                    flags.append(("LOW_CONTRAST", ev, "low"))
-                    w["flags"].append("LOW_CONTRAST")
-                    page_flags.append(Flag(rule_id="LOW_CONTRAST", evidence=ev, severity="low"))
-
-        page_images[pno] = (orig, erased, needs_ocr)
-        page_reports.append(
-            PageReport(
-                page=pno,
-                has_text_layer=has_text_layer,
-                needs_ocr=needs_ocr,
-                words=[
-                    WordRecord(
-                        word_id=w["word_id"],
-                        page=w["page"],
-                        bbox=w["bbox"],
-                        text=w["text"],
-                        source=w["source"],
-                        visible=w["visible"],
-                        flags=list(w["flags"]),
-                    )
-                    for w in words
-                ],
-                flags=page_flags,
-                ocr_used=False,
-            )
-        )
-
     # 3.7 OCR gate
     ocr_boxes: List[OcrBox] = []
     full_images = {}
@@ -308,7 +223,8 @@ def verify_pages(
         page = doc[pno]
         words = [w for w in text_words if w["page"] == pno]
         has_text_layer = len(words) >= MIN_TEXT_LAYER_WORDS
-        orig, erased, needs_ocr = page_images[pno]
+        orig = full_images[pno]
+        erased, needs_ocr = page_images[pno][1], page_images[pno][2]
 
         problem_words = []
         for w in words:
@@ -396,7 +312,29 @@ def verify_pages(
     # 3.11 clean_text
     clean_text = build_clean_text(matched, ocr_only)
 
-    return page_reports, flags, matched, ocr_only, clean_text, verdict
+    # Build block records (Section 6.10)
+    block_records = []
+    for w in matched:
+        block_records.append({
+            "block_id": w.word_id,
+            "block_hash": "",  # computed by caller if needed
+            "page": w.page,
+            "frame_id": None,
+            "bbox": list(w.bbox),
+            "column_id": None,
+            "reading_order": 0,
+            "verdict": w.classification or "UNCORROBORATED_NOT_VISIBLE",
+        })
+
+    # Parse status (Section 6.8)
+    if verdict.status == "QUARANTINE":
+        parse_status = "PARSE_FAILED"
+    elif len(ocr_only) > 0:
+        parse_status = "PARSED_WITH_WARNINGS"
+    else:
+        parse_status = "PARSED"
+
+    return page_reports, flags, matched, ocr_only, clean_text, verdict, block_records, parse_status
 
 
 def _audit_sample(sha256: str, page_count: int) -> Set[int]:

@@ -18,9 +18,28 @@ def stub_db(monkeypatch):
     import app.pipeline as pl
     import stages.s1_intake as s1
 
+    class _FakeConn:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def cursor(self):
+            return self
+        def execute(self, *a, **k):
+            return self
+        def fetchone(self):
+            return None
+        def commit(self):
+            pass
+
+    class _FakePool:
+        def connection(self):
+            return _FakeConn()
+
     monkeypatch.setattr(db, "cache_get", lambda *a, **k: None)
     monkeypatch.setattr(db, "cache_insert", lambda *a, **k: None)
     monkeypatch.setattr(db, "audit_insert", lambda *a, **k: None)
+    monkeypatch.setattr(db, "pool", lambda: _FakePool())
     monkeypatch.setattr(s1, "cache_get", lambda *a, **k: None)
     monkeypatch.setattr(pl, "cache_insert", lambda *a, **k: None)
     monkeypatch.setattr(pl, "audit_insert", lambda *a, **k: None)
@@ -107,7 +126,7 @@ def tiny_font_pdf() -> bytes:
 
 @pytest.fixture
 def off_page_pdf() -> bytes:
-    return pdf_bytes([{"texts": [{"text": "off page", "bbox": (700, 800, 800, 815), "size": 11}]}])
+    return pdf_bytes([{"texts": [{"text": "off page", "bbox": (600, 400, 700, 415), "size": 11}]}])
 
 
 @pytest.fixture

@@ -8,11 +8,14 @@ from rapidfuzz import fuzz
 from app.config import config
 from stages.s2_verify.rules import scan_document_texts
 from stages.s2_verify.ocr import OcrBox
+from stages.s3_govern import REVIEW_THRESHOLD, QUARANTINE_THRESHOLD
 
-VERIFIED = "VERIFIED"
+VERIFIED = "CORROBORATED"
 OCR_ONLY = "OCR_ONLY"
-MISMATCH = "MISMATCH"
-TEXT_ONLY = "TEXT_ONLY"
+MISMATCH = "UNCORROBORATED_TEXT_MISMATCH"
+TEXT_ONLY = "TEXT_SOURCE"
+NOT_VISIBLE = "UNCORROBORATED_NOT_VISIBLE"
+ICON_GLYPH = "ICON_GLYPH"
 
 
 def _iou(a: Tuple[float, float, float, float], b: Tuple[float, float, float, float]) -> float:
@@ -125,18 +128,22 @@ def compute_verdict(
     score = 0.0
     rules = []
     reasons = []
+    weight_lut = {k.lower(): v for k, v in weights.items()}
     for rule_id, evidence, severity in flags:
-        w = float(weights.get(rule_id, 1.0))
+        w = float(weight_lut.get(rule_id.lower(), 1.0))
         score += w
         rules.append(rule_id)
         reasons.append(f"{rule_id}: {evidence}")
 
     if strong_injection:
-        status = "QUARANTINED"
+        status = "QUARANTINE"
         reasons.insert(0, "INJECTION_STRONG: strong injection pattern detected")
-    elif score >= config.suspicious_score:
-        status = "SUSPICIOUS"
-        reasons.insert(0, f"weighted_score={score:.2f} >= threshold={config.suspicious_score}")
+    elif score >= QUARANTINE_THRESHOLD:
+        status = "QUARANTINE"
+        reasons.insert(0, f"weighted_score={score:.2f} >= quarantine_threshold={QUARANTINE_THRESHOLD}")
+    elif score >= REVIEW_THRESHOLD:
+        status = "REVIEW"
+        reasons.insert(0, f"weighted_score={score:.2f} >= review_threshold={REVIEW_THRESHOLD}")
     else:
         status = "CLEAN"
 

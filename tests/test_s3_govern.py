@@ -1,22 +1,22 @@
 from __future__ import annotations
 
 from app.schemas import Verdict
-from stages.s3_govern import govern, latest_version_ok, job_open_ok
+from stages.s3_govern import govern_pre, govern_post
 
 
-def test_govern_clean_proceeds():
+def test_govern_pre_clean_proceeds():
+    result = govern_pre("u1", "sha", type("Config", (), {"pipeline_version": "1.0.0", "rules_version": "1.0.0", "weights": {}})())
+    assert result["proceed"] is True
+
+
+def test_govern_post_clean_proceeds():
     v = Verdict(status="CLEAN", score=1.0, rules=[], reasons=[])
-    proceed, reason = govern("u1", "sha", v)
-    assert proceed is True
+    result = govern_post("u1", "sha", v)
+    assert result["proceed"] is True
 
 
-def test_govern_quarantined_stops():
-    v = Verdict(status="QUARANTINED", score=10.0, rules=["INJECTION_STRONG"], reasons=["inj"])
-    proceed, reason = govern("u1", "sha", v)
-    assert proceed is False
-    assert "quarantined" in reason
-
-
-def test_stubs_return_true():
-    assert latest_version_ok()[0] is True
-    assert job_open_ok()[0] is True
+def test_govern_post_quarantine_stops():
+    v = Verdict(status="QUARANTINE", score=10.0, rules=["INJECTION_STRONG"], reasons=["inj"])
+    result = govern_post("u1", "sha", v)
+    assert result["proceed"] is False
+    assert "quarantined" in result["reason"]

@@ -22,9 +22,9 @@ def seal_key() -> str:
     return key
 
 
-def create_pool(database_url: str | None = None, **kwargs) -> ConnectionPool:
+def create_pool(db_url: str | None = None, **kwargs) -> ConnectionPool:
     global _pool
-    url = database_url or database_url()
+    url = db_url or database_url()
     _pool = ConnectionPool(url, **kwargs)
     return _pool
 
