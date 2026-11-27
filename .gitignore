@@ -28,9 +28,3 @@ Thumbs.db
 
 # pytest cache
 .pytest_cache/
-
-# Checkpoints / operational logs
-checkpoints/
-MAINTENANCE_CHECKLIST.md
-QUERY_LOG.md
-SPEC_COMPLIANCE_CHECKLIST.md
