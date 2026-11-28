@@ -15,8 +15,8 @@ max_pdf_objects: 100000
 # malware scanner
 scan_enabled: false
 scan_engine: "yara+cdr"
-scan_poll_interval: 5
-scan_max_attempts: 5
+scan_poll_interval: 5  # DEPRECATED: scanner runs synchronously in Stage 1
+scan_max_attempts: 5   # DEPRECATED: scanner runs synchronously in Stage 1
 
 # CDR reconstruction
 cdr_dpi: 200
@@ -52,6 +52,8 @@ weights:
 
 # thresholds
 suspicious_score: 5.0
+review_threshold: 2.0
+quarantine_threshold: 5.0
 # strong injection => QUARANTINED directly, regardless of score
 
 # audit

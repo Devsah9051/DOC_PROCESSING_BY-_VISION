@@ -47,12 +47,30 @@
 | 42 | `stages/s5_normalise.py` | Updated build_output() to accept structure_result and populate structure fields | DONE |
 | 43 | `tests/test_s4_structure.py` | NEW: 8 tests for sections, fields, dates, rules, labels, manipulation flags, JD track, sealed output | DONE |
 | 44 | `ARCHITECTURE_DECISIONS.md` | Added ADR-011 (Stage 4) and ADR-012 (Stage 5 integration); updated test count to 91 | DONE |
+| 45 | `app/log.py` | Rewritten for PostgreSQL: %s placeholders, BIGSERIAL, TIMESTAMPTZ, pg_advisory_xact_lock single-writer guard, get_log_chain/verify_chain | DONE |
+| 46 | `scripts/init_db.py` | Added append_only_log table, governance_audit_log as VIEW, backfill function, updated TTL cleanup | DONE |
+| 47 | `app/db.py` | audit_insert writes through append_log → append_only_log; scan_result_insert_full persists scan layer findings | DONE |
+| 48 | `stages/s5_normalise.py` | compute_report_hash includes all structure fields + clean_artifact_sha256; build_output accepts structure_result and clean_artifact_sha256 | DONE |
+| 49 | `stages/s2_verify/__init__.py` | block_hash computed per block via app.hash.block_hash(); clean_artifact_sha256 = clean_hash(block hashes); returned from verify_pages | DONE |
+| 50 | `app/schemas.py` | ScanFinding.scan_layer field; Phase1Output.clean_artifact_sha256 field | DONE |
+| 51 | `app/scanner.py` | All ScanFinding constructions include scan_layer ("raw"|"yara"|"structural"|"cdr"|"encryption"|"zip") | DONE |
+| 52 | `stages/s1_intake.py` | Raw pre-scan blocks emit ScanFindings with scan_layer; scan_findings included in IntakeContext | DONE |
+| 53 | `app/pipeline.py` | Non-PDF end-to-end support (DOCX/text skip Stage 2 verify); unreachable BLOCKED block fixed; scan_result_insert_full called on BLOCKED; clean_artifact_sha256 passed to build_output | DONE |
+| 54 | `app/config.py` + `config/config.yaml` | review_threshold (2.0), quarantine_threshold (5.0) added; scan_poll_interval/scan_max_attempts marked DEPRECATED | DONE |
+| 55 | `stages/s3_govern.py` | Reads thresholds from config.review_threshold/config.quarantine_threshold | DONE |
+| 56 | `stages/s2_verify/verdict.py` | Reads thresholds from config directly (no longer imports from s3_govern) | DONE |
+| 57 | `tests/test_s5_normalise.py` | Added test_structure_field_changes_report_hash | DONE |
+| 58 | `tests/test_pipeline.py` | Added test_docx_end_to_end, test_text_end_to_end | DONE |
+| 59 | `tests/test_log_chain.py` | NEW: append_log chain, verify_chain true, verify_chain detects tampering | DONE |
+| 60 | `ARCHITECTURE_DECISIONS.md` | Added ADR-013 through ADR-017; updated test count to 97 | DONE |
+| 61 | `QUERY_LOG.md` | Added comprehensive entry for all 10-step hardening work | DONE |
 
 ## Test Status
 | Metric | Value |
 |--------|-------|
-| Total tests | 91 |
-| Passed | 91 |
+| Total tests | 97 |
+| Passed | 94 |
+| Skipped | 3 (log chain tests without PostgreSQL) |
 | Failed | 0 |
 | Command | `DATABASE_URL=postgresql://postgres:password@localhost:5432/egca PYTHONPATH=. .venv/bin/pytest` |
 
@@ -73,7 +91,10 @@
 |------|------|--------|---------------|
 | Stage 4.2 Latest-version check | `stages/s3_govern.py` | STUB | Wire to external service when spec fields exist |
 | Stage 4.3 Job-open check | `stages/s3_govern.py` | STUB | Wire to external service when spec fields exist |
+| Non-PDF Stage 2 support | `stages/s2_verify/__init__.py` | DONE | DOCX/text pass Stage 1 and reach Stages 3-5 via sanitized text |
 | Malware scanner | `app/scanner.py` | DONE | Synchronous yara+cdr pipeline in Stage 1; scan_enabled defaults to false |
+| Independent verifier (3 levels) | Not implemented | STUB | Section 4.5 — new `app/verifier.py` |
+| Data contracts (Section 10) | Not implemented | STUB | Section 10 — not started |
 
 ## Database Maintenance
 | Task | Command | Frequency |
@@ -139,17 +160,17 @@ A full spec-compliance review was completed against `/home/devsharma08/Downloads
 
 | Priority | Item | Spec Section | Files to Change |
 |----------|------|--------------|-----------------|
-| P0 | Programming errors must be FAILED, never QUARANTINE | 6.13, 11 | `app/pipeline.py`, `stages/s2_verify/__init__.py` |
-| P0 | Hash chain with domain tags | 4.1, 4.2 | `app/seal.py`, `app/schemas.py`, `app/pipeline.py` |
-| P0 | Append-only log with entry kinds | 4.3 | `app/db.py`, new `app/log.py` |
-| P0 | Independent verifier (3 levels) | 4.5 | new `app/verifier.py` |
-| P0 | Stage 3 pre-gate/post-gate split | 7.2 | `stages/s3_govern.py`, `app/pipeline.py` |
-| P0 | Universal injection scan (separate from Stage 2) | 7.3 | `stages/s3_govern.py` |
-| P0 | Suspicion rating with weights/thresholds | 7.4 | `stages/s3_govern.py`, `app/config.py` |
-| P0 | Stage 2 frame splitting | 6.2 | `stages/s2_verify/__init__.py` |
+| P0 | Programming errors must be FAILED, never QUARANTINE | 6.13, 11 | `app/pipeline.py`, `stages/s2_verify/__init__.py` | DONE |
+| P0 | Hash chain with domain tags | 4.1, 4.2 | `app/seal.py`, `app/schemas.py`, `app/pipeline.py` | DONE |
+| P0 | Append-only log with entry kinds | 4.3 | `app/db.py`, `app/log.py` | DONE |
+| P0 | Independent verifier (3 levels) | 4.5 | new `app/verifier.py` | PENDING |
+| P0 | Stage 3 pre-gate/post-gate split | 7.2 | `stages/s3_govern.py`, `app/pipeline.py` | DONE |
+| P0 | Universal injection scan (separate from Stage 2) | 7.3 | `stages/s3_govern.py` | DONE |
+| P0 | Suspicion rating with weights/thresholds | 7.4 | `stages/s3_govern.py`, `app/config.py` | DONE |
+| P0 | Stage 2 frame splitting | 6.2 | `stages/s2_verify/__init__.py` | PENDING |
 | P0 | Stage 4 structure (conservation ledger, labels, M2-M5) | 8 | `stages/s4_structure.py`, `app/schemas.py` | DONE |
 | P0 | Stage 5 normalisation (provenance, relations, literal keys) | 9 | `stages/s5_normalise.py`, `app/schemas.py` | PARTIAL — provenance/relations via conservation ledger; relations pending |
-| P1 | Stage 2 verdicts (CORROBORATED_FUZZY, ICON_GLYPH, TEXT_SOURCE) | 6.7 | `stages/s2_verify/verdict.py` |
-| P1 | Stage 2 parse status (PARSED, PARSED_WITH_WARNINGS, PARTIAL, PARSE_FAILED) | 6.8 | `stages/s2_verify/__init__.py` |
-| P1 | Run profile (all fields pinned) | 4.11 | `app/config.py`, `app/pipeline.py` |
-| P1 | Stage 2 DOCX and plain text route | 6.12 | `stages/s2_verify/__init__.py` |
+| P1 | Stage 2 verdicts (CORROBORATED_FUZZY, ICON_GLYPH, TEXT_SOURCE) | 6.7 | `stages/s2_verify/verdict.py` | DONE |
+| P1 | Stage 2 parse status (PARSED, PARSED_WITH_WARNINGS, PARTIAL, PARSE_FAILED) | 6.8 | `stages/s2_verify/__init__.py` | DONE |
+| P1 | Run profile (all fields pinned) | 4.11 | `app/config.py`, `app/pipeline.py` | PENDING |
+| P1 | Stage 2 DOCX and plain text route | 6.12 | `stages/s2_verify/__init__.py` | DONE — pipeline handles non-PDF end-to-end |

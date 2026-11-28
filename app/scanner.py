@@ -204,6 +204,7 @@ class ScanFinding:
     """A single threat finding from any scanner stage."""
     rule_id: str
     stage: str  # "magic", "zip", "yara", "cdr", "structural", "encryption"
+    scan_layer: str  # "raw"|"yara"|"structural"|"cdr"|"encryption"|"zip"
     severity: str  # "High", "Medium", "Low", "Informational"
     description: str
     matched_strings: list[str] = field(default_factory=list)
@@ -256,6 +257,7 @@ def magic_byte_check(file_bytes: bytes) -> tuple[str, Optional[ScanFinding], Opt
         finding = ScanFinding(
             rule_id="INVALID_FILE_TYPE",
             stage="magic",
+            scan_layer="magic",
             severity="High",
             description="File does not match PDF, DOCX, or valid UTF-8 text",
         )
@@ -278,6 +280,7 @@ def encryption_check(file_bytes: bytes, file_type: str) -> Optional[ScanFinding]
                 return ScanFinding(
                     rule_id="PDF_ENCRYPTED",
                     stage="encryption",
+                    scan_layer="encryption",
                     severity="High",
                     description="PDF is password-protected / encrypted",
                 )
@@ -285,6 +288,7 @@ def encryption_check(file_bytes: bytes, file_type: str) -> Optional[ScanFinding]
         return ScanFinding(
             rule_id="PDF_PASSWORD_PROTECTED",
             stage="encryption",
+            scan_layer="encryption",
             severity="High",
             description="PDF is password-protected",
         )
@@ -311,6 +315,7 @@ def zip_bomb_guard(file_bytes: bytes, file_type: str, cfg) -> Optional[ScanFindi
                 return ScanFinding(
                     rule_id="ZIP_ENTRY_COUNT",
                     stage="zip",
+                    scan_layer="zip",
                     severity="High",
                     description=f"Too many ZIP entries: {len(entries)} > {cfg.max_zip_entries}",
                 )
@@ -323,6 +328,7 @@ def zip_bomb_guard(file_bytes: bytes, file_type: str, cfg) -> Optional[ScanFindi
                     return ScanFinding(
                         rule_id="ZIP_BOMB_RATIO",
                         stage="zip",
+                        scan_layer="zip",
                         severity="High",
                         description=f"Compression ratio {ratio:.1f}x > {cfg.max_compression_ratio}x",
                     )
@@ -332,6 +338,7 @@ def zip_bomb_guard(file_bytes: bytes, file_type: str, cfg) -> Optional[ScanFindi
                     return ScanFinding(
                         rule_id="ZIP_PATH_TRAVERSAL",
                         stage="zip",
+                        scan_layer="zip",
                         severity="High",
                         description=f"Path traversal in ZIP entry: {entry.filename}",
                     )
@@ -339,6 +346,7 @@ def zip_bomb_guard(file_bytes: bytes, file_type: str, cfg) -> Optional[ScanFindi
         return ScanFinding(
             rule_id="BAD_ZIP",
             stage="zip",
+            scan_layer="zip",
             severity="High",
             description="DOCX file is not a valid ZIP archive",
         )
@@ -382,6 +390,7 @@ def yara_scan(file_bytes: bytes) -> list[ScanFinding]:
             findings.append(ScanFinding(
                 rule_id=f"YARA_{match.rule.upper()}",
                 stage="yara",
+                scan_layer="yara",
                 severity=severity,
                 description=f"YARA rule matched: {match.rule}",
                 matched_strings=matched_strings[:5],
@@ -415,6 +424,7 @@ def structural_parse_check(file_bytes: bytes, file_type: str) -> Optional[ScanFi
             return ScanFinding(
                 rule_id="PDF_PASSWORD_PROTECTED",
                 stage="structural",
+                scan_layer="structural",
                 severity="High",
                 description="PDF is password-protected (detected during structural parse)",
             )
@@ -436,6 +446,7 @@ def structural_parse_check(file_bytes: bytes, file_type: str) -> Optional[ScanFi
                 return ScanFinding(
                     rule_id="PDF_STRUCTURAL_INVALID",
                     stage="structural",
+                    scan_layer="structural",
                     severity="High",
                     description=f"PDF structural validation failed: {exc}",
                 )
@@ -447,6 +458,7 @@ def structural_parse_check(file_bytes: bytes, file_type: str) -> Optional[ScanFi
                     return ScanFinding(
                         rule_id="DOCX_MISSING_DOCUMENT_XML",
                         stage="structural",
+                        scan_layer="structural",
                         severity="High",
                         description="DOCX missing word/document.xml",
                     )
@@ -456,6 +468,7 @@ def structural_parse_check(file_bytes: bytes, file_type: str) -> Optional[ScanFi
             return ScanFinding(
                 rule_id="DOCX_BAD_ZIP",
                 stage="structural",
+                scan_layer="structural",
                 severity="High",
                 description="DOCX is not a valid ZIP archive",
             )
@@ -463,6 +476,7 @@ def structural_parse_check(file_bytes: bytes, file_type: str) -> Optional[ScanFi
             return ScanFinding(
                 rule_id="DOCX_XML_INVALID",
                 stage="structural",
+                scan_layer="structural",
                 severity="High",
                 description=f"DOCX document.xml is not valid XML: {exc}",
             )
@@ -470,6 +484,7 @@ def structural_parse_check(file_bytes: bytes, file_type: str) -> Optional[ScanFi
             return ScanFinding(
                 rule_id="DOCX_STRUCTURAL_INVALID",
                 stage="structural",
+                scan_layer="structural",
                 severity="High",
                 description=f"DOCX structural validation failed: {exc}",
             )

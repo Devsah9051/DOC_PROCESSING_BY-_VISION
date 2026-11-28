@@ -12,7 +12,7 @@ from typing import Optional
 import pymupdf
 
 from app.config import config
-from app.db import cache_get, get_version, register_version
+from app.db import cache_get, get_version, register_version, scan_result_insert_full
 from app.scanner import scan_file, SanitizedArtifact, ScanFinding
 
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -118,32 +118,57 @@ def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> Inta
         )
 
     # 2.2 archive bomb (DOCX is a ZIP) — fast pre-check before scanner
+    raw_findings: list[ScanFinding] = []
     try:
         with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
             entries = zf.infolist()
             if len(entries) > cfg.max_zip_entries:
+                raw_findings.append(ScanFinding(
+                    rule_id="ZIP_ENTRY_COUNT",
+                    stage="zip",
+                    scan_layer="zip",
+                    severity="High",
+                    description=f"Too many ZIP entries: {len(entries)} > {cfg.max_zip_entries}",
+                ))
                 return IntakeContext(
                     outcome="BLOCKED", sha256=sha, size_bytes=size_bytes, filename=filename,
                     file_type=file_type, track=track,
                     version_id="", version_seq=0, uploaded_at=uploaded_at,
                     reason="archive_bomb",
+                    scan_findings=raw_findings,
                 )
             total_compressed = sum(i.compress_size for i in entries)
             total_uncompressed = sum(i.file_size for i in entries)
             if total_compressed > 0 and total_uncompressed / total_compressed > cfg.max_compression_ratio:
+                raw_findings.append(ScanFinding(
+                    rule_id="ZIP_BOMB_RATIO",
+                    stage="zip",
+                    scan_layer="zip",
+                    severity="High",
+                    description=f"Compression ratio {total_uncompressed / total_compressed:.1f}x > {cfg.max_compression_ratio}x",
+                ))
                 return IntakeContext(
                     outcome="BLOCKED", sha256=sha, size_bytes=size_bytes, filename=filename,
                     file_type=file_type, track=track,
                     version_id="", version_seq=0, uploaded_at=uploaded_at,
                     reason="archive_bomb",
+                    scan_findings=raw_findings,
                 )
     except zipfile.BadZipFile:
         if file_type == "docx":
+            raw_findings.append(ScanFinding(
+                rule_id="BAD_ZIP",
+                stage="zip",
+                scan_layer="zip",
+                severity="High",
+                description="DOCX file is not a valid ZIP archive",
+            ))
             return IntakeContext(
                 outcome="BLOCKED", sha256=sha, size_bytes=size_bytes, filename=filename,
                 file_type=file_type, track=track,
                 version_id="", version_seq=0, uploaded_at=uploaded_at,
                 reason="corrupt_zip",
+                scan_findings=raw_findings,
             )
 
     # 2.1 %PDF- header + PDF object tree scan
@@ -158,11 +183,21 @@ def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> Inta
         # Raw-byte scan for suspicious PDF objects
         for pattern in (b"/JS", b"/JavaScript", b"/EmbeddedFiles", b"/Launch", b"/OpenAction"):
             if pattern in file_bytes:
+                pattern_name = pattern.decode("utf-8", errors="replace")
+                raw_findings.append(ScanFinding(
+                    rule_id=f"SUSPICIOUS_PDF_OBJECT:{pattern_name}",
+                    stage="magic",
+                    scan_layer="raw",
+                    severity="High",
+                    description=f"Suspicious PDF object detected: {pattern_name}",
+                    matched_strings=[pattern_name],
+                ))
                 return IntakeContext(
                     outcome="BLOCKED", sha256=sha, size_bytes=size_bytes, filename=filename,
                     file_type=file_type, track=track,
                     version_id="", version_seq=0, uploaded_at=uploaded_at,
-                    reason=f"suspicious_pdf_object:{pattern.decode('utf-8', errors='replace')}",
+                    reason=f"suspicious_pdf_object:{pattern_name}",
+                    scan_findings=raw_findings,
                 )
 
     # 2.3 cache lookup (sha256 + versions)
@@ -262,6 +297,7 @@ def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> Inta
         ScanFinding(
             rule_id=f.rule_id,
             stage=f.stage,
+            scan_layer=f.scan_layer,
             severity=f.severity,
             description=f.description,
             matched_strings=f.matched_strings,

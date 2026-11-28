@@ -297,13 +297,13 @@
 
 | Section | Coverage | Notes |
 |---------|----------|-------|
-| 4 Trust/Seal | ~70% | hash.py, log.py, seal.py implemented; hash chain complete (record_root/stage5_root/file_state_hash); verifier missing |
+| 4 Trust/Seal | ~80% | hash.py, log.py, seal.py implemented; hash chain complete (block_hash/clean_artifact_sha256/record_root/stage5_root/file_state_hash); append_only_log canonical; verifier missing |
 | 5 Stage 1 | ~95% | All spec Section 5 requirements implemented; only encrypted non-PDF and YARA external_link for compressed PDFs remain |
-| 6 Stage 2 | ~50% | Text extraction, render, ghost diff, contrast, OCR, verdicts |
-| 7 Stage 3 | ~40% | Pre-gate/post-gate, suspicion rating, universal scan |
+| 6 Stage 2 | ~60% | Text extraction, render, ghost diff, contrast, OCR, verdicts, block_hash, clean_artifact_sha256, DOCX/text route |
+| 7 Stage 3 | ~50% | Pre-gate/post-gate, suspicion rating, universal scan, thresholds from config |
 | 8 Stage 4 | ~75% | Structure builder, field extractor, conservation ledger, labels, M1-M5, R/F/J rules, date intervals, record_root, pii_ref; missing layout/position signals, proposer agreement gate |
-| 9 Stage 5 | ~55% | Taxonomy + normalise + build_output; provenance/status via Stage 4 ledger; no skill relations |
+| 9 Stage 5 | ~60% | Taxonomy + normalise + build_output; provenance/status via Stage 4 ledger; all structure data sealed in report_hash; no skill relations |
 | 10 Contracts | 0% | Not implemented |
-| 11 Failures | ~15% | FAILED not QUARANTINE for bugs |
-| 12 Performance | ~15% | Result cache; no benchmark |
-| 15 Tests | ~55% | 91 tests pass |
+| 11 Failures | ~40% | FAILED not QUARANTINE for bugs; unreachable code fixed |
+| 12 Performance | ~15% | Result cache; WordIndex O(1) lookup; no benchmark |
+| 15 Tests | ~55% | 97 tests pass (94 passed, 3 skipped without PostgreSQL) |

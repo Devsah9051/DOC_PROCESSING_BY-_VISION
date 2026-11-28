@@ -181,6 +181,7 @@ class TestScanFindingSchema:
         sf = ScanFindingSchema(
             rule_id="YARA_PDF_JAVASCRIPT",
             stage="yara",
+            scan_layer="yara",
             severity="High",
             description="YARA rule matched: pdf_javascript",
             matched_strings=["/JS"],

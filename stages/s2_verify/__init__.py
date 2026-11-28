@@ -5,6 +5,7 @@ from typing import List, Set, Tuple
 import pymupdf
 
 from app.config import config
+from app.hash import block_hash, clean_hash
 from app.schemas import PageReport, WordRecord, Flag
 from stages.s2_verify.rules import cheap_rules, font_rules, scan_document_texts
 from stages.s2_verify.render import render_page, make_text_erased, ghost_diff, contrast
@@ -312,12 +313,20 @@ def verify_pages(
     # 3.11 clean_text
     clean_text = build_clean_text(matched, ocr_only)
 
-    # Build block records (Section 6.10)
+    # Build block records (Section 6.10) with real block hashes
     block_records = []
+    block_hashes = []
     for w in matched:
+        bh = block_hash({
+            "block_id": w.word_id,
+            "page": w.page,
+            "bbox": list(w.bbox),
+            "verdict": w.classification or "UNCORROBORATED_NOT_VISIBLE",
+        })
+        block_hashes.append(bh)
         block_records.append({
             "block_id": w.word_id,
-            "block_hash": "",  # computed by caller if needed
+            "block_hash": bh,
             "page": w.page,
             "frame_id": None,
             "bbox": list(w.bbox),
@@ -325,6 +334,9 @@ def verify_pages(
             "reading_order": 0,
             "verdict": w.classification or "UNCORROBORATED_NOT_VISIBLE",
         })
+
+    # clean_artifact_sha256: hash of all block hashes (Section 4.2 hash chain)
+    clean_artifact_sha256 = clean_hash(block_hashes) if block_hashes else clean_hash([])
 
     # Parse status (Section 6.8)
     if verdict.status == "QUARANTINE":
@@ -334,7 +346,7 @@ def verify_pages(
     else:
         parse_status = "PARSED"
 
-    return page_reports, flags, matched, ocr_only, clean_text, verdict, block_records, parse_status
+    return page_reports, flags, matched, ocr_only, clean_text, verdict, block_records, parse_status, clean_artifact_sha256
 
 
 def _audit_sample(sha256: str, page_count: int) -> Set[int]:

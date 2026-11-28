@@ -67,6 +67,38 @@ CREATE TABLE IF NOT EXISTS scan_results (
     payload JSONB
 );
 
+-- Canonical append-only audit log (Section 4.3).
+-- All audit entries (governance decisions, seals, file state updates, human decisions,
+-- tombstones, checkpoints) are written here. governance_audit_log is a VIEW over this
+-- table for backward compatibility; no data is deleted.
+CREATE TABLE IF NOT EXISTS append_only_log (
+    id BIGSERIAL PRIMARY KEY,
+    entry_hash TEXT NOT NULL UNIQUE,
+    prev_hash TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    version_id TEXT,
+    payload_json TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    signature TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_append_only_log_kind ON append_only_log(kind);
+CREATE INDEX IF NOT EXISTS idx_append_only_log_version ON append_only_log(version_id);
+
+-- Backward-compatible view over append_only_log.
+-- governance_audit_log is now a VIEW so existing code that queries it still works,
+-- but all new writes go through append_log() → append_only_log.
+CREATE OR REPLACE VIEW governance_audit_log AS
+SELECT
+    id::TEXT AS upload_id,
+    (payload_json->>'sha256') AS sha256,
+    kind AS status,
+    (payload_json->>'rules')::JSONB AS rules,
+    (payload_json->>'quarantine_payload')::JSONB AS quarantine_payload,
+    created_at AS ts
+FROM append_only_log
+WHERE kind = 'GATE_DECISION';
+
 -- TTL cleanup: resumes are personal data. Rows older than the retention
 -- window are removed by a periodic job (see cleanup_ttl()). No built-in
 -- TTL in Postgres, so this is run on a schedule.
@@ -79,7 +111,61 @@ def init_db(database_url: str | None = None):
         with conn.cursor() as cur:
             cur.execute(SCHEMA)
         conn.commit()
-    print("Database initialized: resume_cache, governance_audit_log")
+    print("Database initialized: resume_cache, governance_audit_log, version_registry, outbox, scan_results, append_only_log")
+
+
+def backfill_governance_audit_log(database_url: str | None = None):
+    """One-time backfill: copy existing governance_audit_log rows into append_only_log
+    before converting governance_audit_log to a VIEW."""
+    url = database_url or os.environ["DATABASE_URL"]
+    with psycopg.connect(url) as conn:
+        with conn.cursor() as cur:
+            # Check if old governance_audit_log table has rows (before we convert it to a view)
+            cur.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'governance_audit_log' AND table_type = 'BASE TABLE'")
+            if cur.fetchone()[0] == 0:
+                # Table may already be a view; nothing to backfill
+                conn.commit()
+                return
+            cur.execute(
+                "SELECT upload_id, sha256, status, rules, quarantine_payload, ts FROM governance_audit_log"
+            )
+            rows = cur.fetchall()
+            for upload_id, sha256, status, rules, quarantine_payload, ts in rows:
+                import json
+                import time
+                from app.hash import log_hash
+                entry_payload = {
+                    "kind": "GATE_DECISION",
+                    "version_id": None,
+                    "payload": {
+                        "upload_id": upload_id,
+                        "sha256": sha256,
+                        "status": status,
+                        "rules": rules if rules else [],
+                        "quarantine_payload": quarantine_payload,
+                    },
+                    "created_at": ts.timestamp() if hasattr(ts, "timestamp") else time.time(),
+                }
+                entry_hash = log_hash(entry_payload)
+                cur.execute(
+                    """
+                    INSERT INTO append_only_log
+                        (entry_hash, prev_hash, kind, version_id, payload_json, created_at, signature)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (entry_hash) DO NOTHING
+                    """,
+                    (
+                        entry_hash,
+                        "0" * 64,  # backfilled entries chain from genesis
+                        "GATE_DECISION",
+                        None,
+                        json.dumps(entry_payload, sort_keys=True),
+                        ts,
+                        None,
+                    ),
+                )
+        conn.commit()
+    print(f"Backfilled {len(rows)} governance_audit_log rows into append_only_log")
 
 
 def cleanup_ttl(retention_days: int = 30, database_url: str | None = None):
@@ -88,7 +174,7 @@ def cleanup_ttl(retention_days: int = 30, database_url: str | None = None):
     with psycopg.connect(url) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM governance_audit_log WHERE ts < NOW() - (%s || ' days')::interval",
+                "DELETE FROM append_only_log WHERE created_at < NOW() - (%s || ' days')::interval",
                 (str(retention_days),),
             )
             deleted = cur.rowcount

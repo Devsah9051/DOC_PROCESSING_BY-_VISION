@@ -13,6 +13,7 @@ from app.schemas import (
 # --- Section 7.4: Suspicion rating weights ---
 # Weights keyed by severity (policy values).
 # One High finding alone → quarantine threshold; one Medium alone → review threshold.
+# Thresholds come from config (config.yaml); defaults match previous constants.
 SEVERITY_WEIGHTS = {
     "High": 5.0,
     "Medium": 2.0,
@@ -20,8 +21,9 @@ SEVERITY_WEIGHTS = {
     "Informational": 0.0,
 }
 
-REVIEW_THRESHOLD = 2.0   # one Medium finding alone reaches review
-QUARANTINE_THRESHOLD = 5.0  # one High finding alone reaches quarantine
+# Read from config; fall back to previous effective values if not set
+REVIEW_THRESHOLD = config.review_threshold   # one Medium finding alone reaches review
+QUARANTINE_THRESHOLD = config.quarantine_threshold  # one High finding alone reaches quarantine
 
 
 def _severity_to_weight(severity: str) -> float:

@@ -83,6 +83,7 @@ def build_output(
     prev_hash: str,
     file_state: Optional[FileState] = None,
     structure_result: Optional[StructureResult] = None,
+    clean_artifact_sha256: Optional[str] = None,
 ) -> Phase1Output:
     """6.2 Build Phase1Output with report_hash (stage5_root) and signature."""
     output = Phase1Output(
@@ -95,6 +96,7 @@ def build_output(
         prev_hash=prev_hash,
         report_hash="",
         signature="",
+        clean_artifact_sha256=clean_artifact_sha256,
     )
     if structure_result:
         output.structure_record_root = structure_result.record_root
@@ -117,6 +119,8 @@ def build_output(
         versions=versions,
         prev_hash=prev_hash,
         file_state=file_state,
+        structure_result=structure_result,
+        clean_artifact_sha256=clean_artifact_sha256,
     )
     output.report_hash = report_hash
     fs_hash = state_hash(file_state.model_dump() if file_state else {})
@@ -131,8 +135,17 @@ def compute_report_hash(
     versions: dict,
     prev_hash: str,
     file_state: Optional[FileState] = None,
+    structure_result: Optional[StructureResult] = None,
+    clean_artifact_sha256: Optional[str] = None,
 ) -> str:
-    """Compute stage5_root (report_hash) deterministically, excluding timings_ms."""
+    """Compute stage5_root (report_hash) deterministically, excluding timings_ms.
+
+    Includes ALL structure data so the seal attests to every piece of output data:
+    structure_record_root, structure_pii_ref, structure_labels, structure_rule_flags,
+    structure_manipulation_flags, structure_date_intervals, structure_conservation_ledger,
+    structure_track.
+    Also includes clean_artifact_sha256 (Stage 2 hash chain root).
+    """
     dump = {
         "sections": [_dump_item(s) for s in sections],
         "tokens": [_dump_item(t) for t in tokens],
@@ -140,6 +153,27 @@ def compute_report_hash(
         "file_state": file_state.model_dump() if file_state else None,
         "versions": versions,
         "prev_hash": prev_hash,
+        "clean_artifact_sha256": clean_artifact_sha256,
+        "structure_record_root": structure_result.record_root if structure_result else None,
+        "structure_pii_ref": structure_result.pii_ref if structure_result else None,
+        "structure_labels": structure_result.labels if structure_result else [],
+        "structure_rule_flags": structure_result.rule_flags if structure_result else [],
+        "structure_manipulation_flags": [
+            mf.model_dump() if hasattr(mf, "model_dump") else mf
+            for mf in structure_result.manipulation_flags
+        ]
+        if structure_result
+        else [],
+        "structure_date_intervals": [
+            di.model_dump() if hasattr(di, "model_dump") else di
+            for di in structure_result.date_intervals
+        ]
+        if structure_result
+        else [],
+        "structure_conservation_ledger": (
+            structure_result.conservation_ledger if structure_result else []
+        ),
+        "structure_track": structure_result.track if structure_result else None,
     }
     return norm_hash(dump)
 

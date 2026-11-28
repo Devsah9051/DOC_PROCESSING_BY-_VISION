@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.schemas import WordRecord, Verdict
+from app.schemas import WordRecord, Verdict, StructureResult, ScanFinding
 from stages.s5_normalise import load_taxonomy, normalise_tokens, build_output
 
 
@@ -36,3 +36,63 @@ def test_build_output_hash_and_seal():
 
     out3 = build_output([], [_wr("w1", "ruby")], verdict, versions, {}, "prevhash")
     assert out3.report_hash != out1.report_hash
+
+
+def test_structure_field_changes_report_hash():
+    """Changing any structure field must change report_hash (all output data is sealed)."""
+    verdict = Verdict(status="CLEAN", score=0.0, rules=[], reasons=[])
+    versions = {"pipeline_version": "1.0.0", "rules_version": "1.0.0"}
+    tokens = [_wr("w1", "python")]
+
+    sr1 = StructureResult(
+        record_root="root_a",
+        pii_ref="pii_a",
+        labels=[{"field": "x", "label": "FACT"}],
+        rule_flags=["R1_MISSING_REQUIRED_SECTION"],
+        manipulation_flags=[],
+        date_intervals=[],
+        conservation_ledger=[{"event": "test"}],
+        track="resume",
+    )
+    out1 = build_output([], tokens, verdict, versions, {}, "prevhash", structure_result=sr1)
+
+    sr2 = StructureResult(
+        record_root="root_b",  # different root
+        pii_ref="pii_a",
+        labels=[{"field": "x", "label": "FACT"}],
+        rule_flags=["R1_MISSING_REQUIRED_SECTION"],
+        manipulation_flags=[],
+        date_intervals=[],
+        conservation_ledger=[{"event": "test"}],
+        track="resume",
+    )
+    out2 = build_output([], tokens, verdict, versions, {}, "prevhash", structure_result=sr2)
+    assert out2.report_hash != out1.report_hash
+
+    # Different pii_ref also changes hash
+    sr3 = StructureResult(
+        record_root="root_a",
+        pii_ref="pii_b",  # different pii_ref
+        labels=[{"field": "x", "label": "FACT"}],
+        rule_flags=["R1_MISSING_REQUIRED_SECTION"],
+        manipulation_flags=[],
+        date_intervals=[],
+        conservation_ledger=[{"event": "test"}],
+        track="resume",
+    )
+    out3 = build_output([], tokens, verdict, versions, {}, "prevhash", structure_result=sr3)
+    assert out3.report_hash != out1.report_hash
+
+    # Different labels also changes hash
+    sr4 = StructureResult(
+        record_root="root_a",
+        pii_ref="pii_a",
+        labels=[{"field": "x", "label": "CONFLICT"}],  # different label
+        rule_flags=["R1_MISSING_REQUIRED_SECTION"],
+        manipulation_flags=[],
+        date_intervals=[],
+        conservation_ledger=[{"event": "test"}],
+        track="resume",
+    )
+    out4 = build_output([], tokens, verdict, versions, {}, "prevhash", structure_result=sr4)
+    assert out4.report_hash != out1.report_hash

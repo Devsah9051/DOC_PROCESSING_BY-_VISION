@@ -135,14 +135,15 @@ Stage 2 trusts Stage 1's scan results. Clean files (`cdr_applied=False`) go thro
 |------|-------|
 | `tests/test_scanner.py` | 20 tests — magic byte, zip bomb, yara, CDR (full + targeted), clean passthrough, infected, external links, raw sha256, structural invalid, schema validation, legacy compat |
 | `tests/test_s1_intake.py` | 21 tests — file type detection, safe filename, outcomes, version fields, cache hit, pipeline integration |
-| `tests/test_pipeline.py` | Integration tests — cache hit, corrupt, oversized, injection, hash stability, versions/timings |
+| `tests/test_pipeline.py` | 17 tests — clean/corrupt/oversized/injection, hash stability, cache hit, DOCX/text end-to-end, versions/timings |
 | `tests/test_s2_verify.py` | 16 tests — font anomalies, injection, classification, verdict computation |
 | `tests/test_s3_govern.py` | 3 tests — pre-gate clean, post-gate clean, post-gate quarantine |
 | `tests/test_s4_structure.py` | 8 tests — sections, fields, date intervals, rule flags, labels, manipulation flags, JD track, sealed output |
-| `tests/test_s5_normalise.py` | Canonical skills, unknown skills, hash/seal |
-| `tests/test_seal.py` | Seal roundtrip, deterministic fields |
+| `tests/test_s5_normalise.py` | 5 tests — canonical skills, unknown skill, hash/seal, structure field changes report hash |
+| `tests/test_seal.py` | 2 tests — seal roundtrip, deterministic fields |
+| `tests/test_log_chain.py` | 3 tests — append_log chain, verify_chain true, verify_chain detects tampering (skipped without PostgreSQL) |
 
-**Total: 91 tests, all passing.**
+**Total: 97 tests (94 passed, 3 skipped without PostgreSQL).**
 
 **Command:** `DATABASE_URL=postgresql://postgres:password@localhost:5432/egca PYTHONPATH=. .venv/bin/pytest`
 
@@ -154,10 +155,12 @@ Stage 2 trusts Stage 1's scan results. Clean files (`cdr_applied=False`) go thro
 |------|------|--------|
 | Stage 4.2 Latest-version check | `stages/s3_govern.py` | STUB — wire to external service |
 | Stage 4.3 Job-open check | `stages/s3_govern.py` | STUB — wire to external service |
-| Non-PDF Stage 2 support | `stages/s2_verify/__init__.py` | PENDING — DOCX/text pass Stage 1 but Stage 2 requires pymupdf doc |
+| Non-PDF Stage 2 support | `stages/s2_verify/__init__.py` | DONE — DOCX/text pass Stage 1 and reach Stages 3-5 via sanitized text |
 | Malware scanner daemon deployment | `app/scanner.py` | scan_enabled defaults to false; set to true in production |
 | YARA external_link rule for PDFs | `app/scanner.py` | Limited — compressed PDF streams hide URLs from string matching; external_link is Medium severity (stripped by CDR, not blocked) |
 | Encrypted PDF detection | `app/scanner.py` | pikepdf PasswordError detection; non-PDF encrypted files not detected |
+| Independent verifier (Level 1-3) | Not implemented | Section 4.5 — stub only |
+| Data contracts (Section 10) | Not implemented | Section 10 — not started |
 
 ---
 
@@ -214,10 +217,71 @@ If Stage 4 structure causes issues:
 **Status:** Implemented  
 **Scope:** `stages/s5_normalise.py`, `app/schemas.py`
 
-`build_output()` now accepts optional `structure_result: StructureResult` and populates:
-- `structure_record_root`, `structure_pii_ref`
-- `structure_labels`, `structure_rule_flags`, `structure_manipulation_flags`
-- `structure_date_intervals`, `structure_conservation_ledger`, `structure_track`
+`build_output()` now accepts optional `structure_result: StructureResult` and `clean_artifact_sha256`, populating all structure fields in `Phase1Output` and including them in `compute_report_hash()` so the seal attests to every piece of output data.
+
+---
+
+## Decision ADR-013: Single Audit Log — append_only_log is Canonical
+
+**Status:** Implemented  
+**Scope:** `app/log.py`, `app/db.py`, `scripts/init_db.py`
+
+- `append_only_log` is the canonical audit store (BIGSERIAL, TIMESTAMPTZ, hash-chained entries)
+- `governance_audit_log` is now a VIEW over `append_only_log` (backward compatible, no data deleted)
+- `audit_insert()` writes through `append_log()` → `append_only_log`
+- One-time backfill copies existing `governance_audit_log` rows into `append_only_log`
+- Single-writer guard via `pg_advisory_xact_lock(hashtext('egca_log'))`
+- `get_log_chain()` and `verify_chain()` work on PostgreSQL
+
+---
+
+## Decision ADR-014: Hash Chain Closure — block_hash + clean_artifact_sha256
+
+**Status:** Implemented  
+**Scope:** `stages/s2_verify/__init__.py`, `app/hash.py`, `app/schemas.py`, `app/pipeline.py`, `stages/s5_normalise.py`
+
+- `block_hash()` computed per block using `app.hash.block_hash()` (domain tag `egca/block/v1`)
+- `clean_artifact_sha256 = clean_hash([...block hashes...])` computed as hash chain root
+- `clean_artifact_sha256` field added to `Phase1Output`
+- Included in `compute_report_hash()` so the seal covers the hash chain
+
+---
+
+## Decision ADR-015: Single Source of Truth for Thresholds
+
+**Status:** Implemented  
+**Scope:** `app/config.py`, `config/config.yaml`, `stages/s3_govern.py`, `stages/s2_verify/verdict.py`
+
+- `review_threshold` (2.0) and `quarantine_threshold` (5.0) moved to config
+- `s3_govern.py` reads thresholds from `config.review_threshold` / `config.quarantine_threshold`
+- `verdict.py` reads thresholds from `config` directly (no longer imports from s3_govern)
+- `scan_poll_interval` and `scan_max_attempts` marked DEPRECATED (scanner runs synchronously)
+
+---
+
+## Decision ADR-016: Non-PDF Support End-to-End
+
+**Status:** Implemented  
+**Scope:** `app/pipeline.py`
+
+- DOCX files: CDR extracts clean text → Stage 2 verify skipped (minimal CLEAN verdict) → Stages 3-5 process extracted text
+- Text files: raw bytes used as clean text → same flow as DOCX
+- `clean_artifact_sha256` computed even for non-PDF (hash of empty block list)
+- Tests added for DOCX and .txt end-to-end pipeline
+
+---
+
+## Decision ADR-017: Scan Layer Provenance
+
+**Status:** Implemented  
+**Scope:** `app/scanner.py`, `app/schemas.py`, `stages/s1_intake.py`, `app/pipeline.py`
+
+- `ScanFinding.scan_layer` field added: "raw"|"yara"|"structural"|"cdr"|"encryption"|"zip"
+- Raw pre-scan blocks (archive bomb, suspicious PDF object) emit ScanFindings with `scan_layer`
+- `scan_result_insert_full()` persists findings with layer info to `scan_results`
+- Raw pre-scan layer preserved (not removed)
+
+---
 
 **Last Updated:** 2026-11-28  
-**Total Tests:** 91 passing
+**Total Tests:** 97 (94 passed, 3 skipped without PostgreSQL)

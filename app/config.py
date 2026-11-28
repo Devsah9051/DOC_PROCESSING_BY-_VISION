@@ -22,8 +22,8 @@ class Config:
     max_pdf_objects: int = 100000
     scan_enabled: bool = False
     scan_engine: str = "yara+cdr"
-    scan_poll_interval: int = 5
-    scan_max_attempts: int = 5
+    scan_poll_interval: int = 5  # DEPRECATED: scanner runs synchronously in Stage 1
+    scan_max_attempts: int = 5   # DEPRECATED: scanner runs synchronously in Stage 1
     cdr_dpi: int = 200
     cdr_reconstruct_pdf: bool = True
     cdr_reconstruct_docx: bool = True
@@ -35,6 +35,8 @@ class Config:
     fuzzy_threshold: int = 85
     weights: dict = field(default_factory=dict)
     suspicious_score: float = 5.0
+    review_threshold: float = 2.0
+    quarantine_threshold: float = 5.0
     audit_rate: float = 0.05
     injection: dict = field(default_factory=dict)
     tiny_font_max_pt: float = field(default=6.0)
@@ -59,8 +61,8 @@ class Config:
             max_pdf_objects=int(data.get("max_pdf_objects", 100000)),
             scan_enabled=bool(data.get("scan_enabled", False)),
             scan_engine=str(data.get("scan_engine", "yara+cdr")),
-            scan_poll_interval=int(data.get("scan_poll_interval", 5)),
-            scan_max_attempts=int(data.get("scan_max_attempts", 5)),
+            scan_poll_interval=int(data.get("scan_poll_interval", 5)),  # DEPRECATED
+            scan_max_attempts=int(data.get("scan_max_attempts", 5)),    # DEPRECATED
             cdr_dpi=int(data.get("cdr_dpi", 200)),
             cdr_reconstruct_pdf=bool(data.get("cdr_reconstruct_pdf", True)),
             cdr_reconstruct_docx=bool(data.get("cdr_reconstruct_docx", True)),
@@ -72,6 +74,8 @@ class Config:
             fuzzy_threshold=int(data.get("fuzzy_threshold", 85)),
             weights=weights,
             suspicious_score=float(data.get("suspicious_score", 5.0)),
+            review_threshold=float(data.get("review_threshold", 2.0)),
+            quarantine_threshold=float(data.get("quarantine_threshold", 5.0)),
             audit_rate=float(data.get("audit_rate", 0.05)),
             injection=data.get("injection", {}),
             tiny_font_max_pt=float(data.get("tiny_font_max_pt", 6.0)),

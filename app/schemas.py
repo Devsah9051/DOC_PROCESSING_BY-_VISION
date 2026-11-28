@@ -89,6 +89,8 @@ class Phase1Output(BaseModel):
     prev_hash: str
     report_hash: str
     signature: str
+    # Stage 2 hash chain (Section 4.2)
+    clean_artifact_sha256: Optional[str] = None
     # Stage 4 structure output (Section 8.8)
     structure_record_root: Optional[str] = None
     structure_pii_ref: Optional[str] = None
@@ -147,7 +149,8 @@ class ScanResult(BaseModel):
 class ScanFinding(BaseModel):
     """A single threat finding from any scanner stage."""
     rule_id: str
-    stage: str  # "magic", "zip", "yara", "cdr"
+    stage: str  # "magic", "zip", "yara", "cdr", "structural", "encryption"
+    scan_layer: str  # "raw"|"yara"|"structural"|"cdr"|"encryption"|"zip"
     severity: str  # "High", "Medium", "Low", "Informational"
     description: str
     matched_strings: list[str] = []

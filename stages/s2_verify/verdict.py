@@ -8,7 +8,6 @@ from rapidfuzz import fuzz
 from app.config import config
 from stages.s2_verify.rules import scan_document_texts
 from stages.s2_verify.ocr import OcrBox
-from stages.s3_govern import REVIEW_THRESHOLD, QUARANTINE_THRESHOLD
 
 VERIFIED = "CORROBORATED"
 OCR_ONLY = "OCR_ONLY"
@@ -138,12 +137,12 @@ def compute_verdict(
     if strong_injection:
         status = "QUARANTINE"
         reasons.insert(0, "INJECTION_STRONG: strong injection pattern detected")
-    elif score >= QUARANTINE_THRESHOLD:
+    elif score >= config.quarantine_threshold:
         status = "QUARANTINE"
-        reasons.insert(0, f"weighted_score={score:.2f} >= quarantine_threshold={QUARANTINE_THRESHOLD}")
-    elif score >= REVIEW_THRESHOLD:
+        reasons.insert(0, f"weighted_score={score:.2f} >= quarantine_threshold={config.quarantine_threshold}")
+    elif score >= config.review_threshold:
         status = "REVIEW"
-        reasons.insert(0, f"weighted_score={score:.2f} >= review_threshold={REVIEW_THRESHOLD}")
+        reasons.insert(0, f"weighted_score={score:.2f} >= review_threshold={config.review_threshold}")
     else:
         status = "CLEAN"
 

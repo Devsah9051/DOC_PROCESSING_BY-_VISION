@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import time
-from typing import Optional
+from typing import List, Optional
 
 import pymupdf
 
 from app.config import config
-from app.db import cache_get, cache_insert, audit_insert
+from app.db import cache_get, cache_insert, audit_insert, scan_result_insert_full
 from app.hash import original_sha256, block_hash, clean_hash, record_hash, norm_hash, state_hash, idem_hash
 from app.log import append_log
 from app.schemas import (
@@ -109,23 +109,19 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
         if ctx.outcome != "READY":
             # Non-READY outcome: return appropriate terminal output
             if ctx.outcome == "BLOCKED":
-                # Security issue → QUARANTINE (not a bug)
-                out = Phase1Output(
-                    sections=[], tokens=[],
-                    verdict=Verdict(status="QUARANTINE", score=10.0, rules=["INTAKE_BLOCKED"], reasons=[ctx.reason]),
-                    versions=versions, timings_ms=timings_ms, prev_hash=sha256,
-                    report_hash="", signature="",
-                )
+                # Security issue → QUARANTINE (not a bug). Falls through to
+                # the scanner-infected BLOCKED block below for unified handling.
+                pass
             else:
                 # REJECTED / EXPIRED / FAILED → FAILED (programming or validation error)
                 out = _failed_output(sha256, f"intake: {ctx.reason}", timings_ms)
-            out.report_hash = hashlib.sha256(json_dumps(out.model_dump()).encode()).hexdigest()
-            out.signature = seal_fields(out.report_hash, "", versions)
-            try:
-                audit_insert(upload_id, sha256, out.verdict.status, [ctx.reason], str(out.model_dump()))
-            except Exception:
-                pass
-            return out
+                out.report_hash = hashlib.sha256(json_dumps(out.model_dump()).encode()).hexdigest()
+                out.signature = seal_fields(out.report_hash, "", versions)
+                try:
+                    audit_insert(upload_id, sha256, out.verdict.status, [ctx.reason], str(out.model_dump()))
+                except Exception:
+                    pass
+                return out
 
         doc = ctx.doc
 
@@ -135,6 +131,8 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
         scan_findings = ctx.scan_findings
 
         # Non-READY outcome from scanner (infected file → BLOCKED → QUARANTINE)
+        # Also catches raw pre-scan blocks (archive bomb, suspicious PDF object)
+        # that fell through from the first check above.
         if ctx.outcome == "BLOCKED":
             out = Phase1Output(
                 sections=[], tokens=[],
@@ -142,6 +140,30 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
                 versions=versions, timings_ms=timings_ms, prev_hash=sha256,
                 report_hash="", signature="",
             )
+            # Persist scan_results row for raw pre-scan blocks AND scanner-infected blocks (Step 5)
+            if ctx.scan_findings:
+                try:
+                    scan_result_insert_full(
+                        sha256=sha256,
+                        file_type=ctx.file_type,
+                        original_size=ctx.size_bytes,
+                        sanitized_size=0,
+                        scan_engine="raw+yara+cdr",
+                        infected=True,
+                        threat_name=ctx.reason,
+                        findings=[{
+                            "rule_id": f.rule_id,
+                            "stage": f.stage,
+                            "scan_layer": f.scan_layer,
+                            "severity": f.severity,
+                            "description": f.description,
+                            "matched_strings": f.matched_strings,
+                        } for f in ctx.scan_findings],
+                        cdr_applied=False,
+                        cdr_method=None,
+                    )
+                except Exception:
+                    pass
             out.report_hash = hashlib.sha256(json_dumps(out.model_dump()).encode()).hexdigest()
             out.signature = seal_fields(out.report_hash, "", versions)
             try:
@@ -186,19 +208,48 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
             pass
         return out
 
-    # Non-PDF files accepted by Stage 1 but Stage 2 verify requires a pymupdf doc
+    # Non-PDF files accepted by Stage 1: use sanitized text for downstream stages.
+    # DOCX → clean text from CDR; text → original bytes.
+    # No pymupdf doc → Stage 2 verify is skipped (minimal CLEAN verdict).
+    clean_artifact_sha256 = clean_hash([])
     if doc is None:
-        out = _failed_output(sha256, f"intake: file_type_not_supported_by_verify", timings_ms)
-        out.report_hash = hashlib.sha256(json_dumps(out.model_dump()).encode()).hexdigest()
-        out.signature = seal_fields(out.report_hash, "", versions)
+        clean_text = sanitized_artifact.sanitized_bytes.decode("utf-8", errors="replace") if sanitized_artifact.sanitized_bytes else ""
+        # Create word tokens from clean text for Structure/Normalise stages
+        matched: List = []
+        word_id = 0
+        for wtext in clean_text.split():
+            matched.append(type("WordRecord", (), {
+                "word_id": f"w{word_id}",
+                "page": 1,
+                "bbox": [0.0, 0.0, 0.0, 0.0],
+                "text": wtext,
+                "source": "text_layer",
+                "visible": True,
+                "flags": [],
+            })())
+            word_id += 1
+        ocr_only: List = []
+        verdict = Verdict(status="CLEAN", score=0.0, rules=[], reasons=["non_pdf_no_verify"])
+        block_records = []
+        parse_status = "PARSED"
+        clean_artifact_sha256 = clean_hash([clean_artifact_sha256]) if clean_artifact_sha256 else clean_hash([])
+        record("stage2_verify", t0)  # record timing even though skipped
+    else:
+        # ---- Stage 2: Verify (PDF only) ----
+        t0 = _now_ms()
         try:
-            audit_insert(upload_id, sha256, "FAILED", ["UNSUPPORTED_FILE_TYPE"], str(out.model_dump()))
-        except Exception:
-            pass
-        return out
-
-    # ---- Stage 3 pre-gate (before parsing) ----
-    t0 = _now_ms()
+            page_reports, flags, matched, ocr_only, clean_text, verdict, block_records, parse_status, clean_artifact_sha256 = verify_pages(doc, sha256, config)
+            record("stage2_verify", t0)
+        except Exception as exc:
+            record("stage2_verify", t0)
+            out = _failed_output(sha256, f"verify: {exc}", timings_ms)
+            out.report_hash = hashlib.sha256(json_dumps(out.model_dump()).encode()).hexdigest()
+            out.signature = seal_fields(out.report_hash, "", versions)
+            try:
+                doc.close()
+            except Exception:
+                pass
+            return out
     try:
         # Convert ScanFinding dataclasses to dicts for govern_pre
         scan_findings_dicts = [
@@ -211,6 +262,7 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
             }
             for f in (ctx.scan_findings or [])
         ]
+        t0 = _now_ms()
         pre_result = govern_pre(upload_id, sha256, config, scan_findings_dicts)
         record("stage3_pre_gate", t0)
         if not pre_result["proceed"]:
@@ -225,22 +277,6 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
     except Exception as exc:
         record("stage3_pre_gate", t0)
         out = _failed_output(sha256, f"pre_gate: {exc}", timings_ms)
-        out.report_hash = hashlib.sha256(json_dumps(out.model_dump()).encode()).hexdigest()
-        out.signature = seal_fields(out.report_hash, "", versions)
-        try:
-            doc.close()
-        except Exception:
-            pass
-        return out
-
-    # ---- Stage 2: Verify ----
-    t0 = _now_ms()
-    try:
-        page_reports, flags, matched, ocr_only, clean_text, verdict, block_records, parse_status = verify_pages(doc, sha256, config)
-        record("stage2_verify", t0)
-    except Exception as exc:
-        record("stage2_verify", t0)
-        out = _failed_output(sha256, f"verify: {exc}", timings_ms)
         out.report_hash = hashlib.sha256(json_dumps(out.model_dump()).encode()).hexdigest()
         out.signature = seal_fields(out.report_hash, "", versions)
         try:
@@ -343,6 +379,7 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
             timings_ms=timings_ms,
             prev_hash=sha256,
             structure_result=structure_result,
+            clean_artifact_sha256=clean_artifact_sha256,
         )
 
         try:

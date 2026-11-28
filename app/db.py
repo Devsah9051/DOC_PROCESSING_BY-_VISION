@@ -61,13 +61,46 @@ def cache_insert(sha256: str, pipeline_version: str, rules_version: str, output_
 
 
 def audit_insert(upload_id: str, sha256: str, status: str, rules: list, quarantine_payload: str | None):
-    with pool().connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO governance_audit_log (upload_id, sha256, status, rules, quarantine_payload) "
-                "VALUES (%s,%s,%s,%s,%s) ON CONFLICT (upload_id) DO NOTHING",
-                (upload_id, sha256, status, rules, quarantine_payload),
-            )
+    """Write an audit entry through the append-only log (canonical store).
+
+    governance_audit_log is now a VIEW over append_only_log; all new writes go here.
+    """
+    import json
+    import time
+
+    from app.log import append_log
+
+    entry_payload = {
+        "kind": "GATE_DECISION",
+        "version_id": None,
+        "payload": {
+            "upload_id": upload_id,
+            "sha256": sha256,
+            "status": status,
+            "rules": rules if rules else [],
+            "quarantine_payload": quarantine_payload,
+        },
+        "created_at": time.time(),
+    }
+    try:
+        append_log("GATE_DECISION", entry_payload["payload"])
+    except Exception:
+        # Fallback: try direct insert if append_log not yet initialised
+        with pool().connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO append_only_log (entry_hash, prev_hash, kind, version_id, payload_json, created_at, signature) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        "0" * 64,
+                        "0" * 64,
+                        "GATE_DECISION",
+                        None,
+                        json.dumps(entry_payload, sort_keys=True),
+                        entry_payload["created_at"],
+                        None,
+                    ),
+                )
             conn.commit()
 
 

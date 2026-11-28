@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 from unittest import mock
 
 import pytest
@@ -8,8 +10,31 @@ import pytest
 from app.pipeline import run_phase1
 
 
-def _run(pdf_bytes, filename="resume.pdf", upload_id="u1"):
-    return run_phase1(pdf_bytes, filename, upload_id)
+def _run(file_bytes, filename="resume.pdf", upload_id="u1"):
+    return run_phase1(file_bytes, filename, upload_id)
+
+
+def _make_docx(text_content: str) -> bytes:
+    """Create a minimal valid DOCX with the given text content."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("[Content_Types].xml",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            '</Types>')
+        zf.writestr("word/document.xml",
+            f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            f'<w:body><w:p><w:r><w:t>{text_content}</w:t></w:r></w:p></w:body>'
+            f'</w:document>')
+    return buf.getvalue()
+
+
+def _make_text(text_content: str) -> bytes:
+    return text_content.encode("utf-8")
 
 
 def test_clean_pdf_is_clean(clean_pdf):
@@ -122,3 +147,30 @@ def test_output_has_versions_and_timings(clean_pdf):
     assert "stage3_post_gate" in out.timings_ms
     assert "stage4_structure" in out.timings_ms
     assert "stage5_normalise" in out.timings_ms
+
+
+def test_docx_end_to_end():
+    """DOCX file passes through Stage 1 (CDR extracts text), skips Stage 2 verify,
+    reaches Stage 4/5 with extracted text tokens."""
+    docx_bytes = _make_docx("Jane Doe Software Engineer")
+    out = _run(docx_bytes, "resume.docx")
+    assert out.verdict.status == "CLEAN", out.verdict.reasons
+    # Tokens should contain extracted text
+    token_texts = " ".join(t["text"] for t in out.tokens)
+    assert "Jane" in token_texts or "Doe" in token_texts or "Software" in token_texts
+    assert out.prev_hash
+    assert out.report_hash
+    assert out.signature
+
+
+def test_text_end_to_end():
+    """Plain text file passes through Stage 1, skips Stage 2 verify,
+    reaches Stage 4/5 with text tokens."""
+    text_bytes = _make_text("John Smith Product Manager")
+    out = _run(text_bytes, "resume.txt")
+    assert out.verdict.status == "CLEAN", out.verdict.reasons
+    token_texts = " ".join(t["text"] for t in out.tokens)
+    assert "John" in token_texts or "Smith" in token_texts or "Product" in token_texts
+    assert out.prev_hash
+    assert out.report_hash
+    assert out.signature

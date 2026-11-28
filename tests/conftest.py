@@ -29,6 +29,8 @@ def stub_db(monkeypatch):
             return self
         def fetchone(self):
             return None
+        def fetchall(self):
+            return []
         def commit(self):
             pass
 

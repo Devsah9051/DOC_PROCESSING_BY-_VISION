@@ -17,33 +17,36 @@ LOG_ENTRY_KINDS = {
 
 
 def _ensure_log_table(conn) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS append_only_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            entry_hash TEXT NOT NULL UNIQUE,
-            prev_hash TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            version_id TEXT,
-            payload_json TEXT NOT NULL,
-            created_at REAL NOT NULL,
-            signature TEXT
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS append_only_log (
+                id BIGSERIAL PRIMARY KEY,
+                entry_hash TEXT NOT NULL UNIQUE,
+                prev_hash TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                version_id TEXT,
+                payload_json TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                signature TEXT
+            )
+            """
         )
-        """
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_append_only_log_kind ON append_only_log(kind)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_append_only_log_version ON append_only_log(version_id)"
-    )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_append_only_log_kind ON append_only_log(kind)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_append_only_log_version ON append_only_log(version_id)"
+        )
 
 
 def _get_last_hash(conn) -> str:
-    row = conn.execute(
-        "SELECT entry_hash FROM append_only_log ORDER BY id DESC LIMIT 1"
-    ).fetchone()
-    return row[0] if row else "0" * 64
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT entry_hash FROM append_only_log ORDER BY id DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        return row[0] if row else "0" * 64
 
 
 def append_log(
@@ -55,39 +58,43 @@ def append_log(
     """Append an entry to the append-only log. Returns the entry hash.
 
     Each entry is hashed with egca/log/v1 and chained to the previous entry.
-    One writer at a time (DB lock ensures serialisation).
+    One writer at a time (PostgreSQL advisory transaction lock ensures serialisation).
     """
     if kind not in LOG_ENTRY_KINDS:
         raise ValueError(f"invalid log entry kind: {kind}")
 
     import time
+    import json
 
     with db.pool().connection() as conn:
-        _ensure_log_table(conn)
-        prev_hash = _get_last_hash(conn)
-        entry_payload = {
-            "kind": kind,
-            "version_id": version_id,
-            "payload": payload,
-            "created_at": time.time(),
-        }
-        entry_hash = log_hash(entry_payload)
-        conn.execute(
-            """
-            INSERT INTO append_only_log
-                (entry_hash, prev_hash, kind, version_id, payload_json, created_at, signature)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                entry_hash,
-                prev_hash,
-                kind,
-                version_id,
-                __import__("json").dumps(entry_payload, sort_keys=True),
-                entry_payload["created_at"],
-                signature,
-            ),
-        )
+        with conn.cursor() as cur:
+            # Single-writer guard: advisory transaction lock
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext('egca_log'))")
+            _ensure_log_table(conn)
+            prev_hash = _get_last_hash(conn)
+            entry_payload = {
+                "kind": kind,
+                "version_id": version_id,
+                "payload": payload,
+                "created_at": time.time(),
+            }
+            entry_hash = log_hash(entry_payload)
+            cur.execute(
+                """
+                INSERT INTO append_only_log
+                    (entry_hash, prev_hash, kind, version_id, payload_json, created_at, signature)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    entry_hash,
+                    prev_hash,
+                    kind,
+                    version_id,
+                    json.dumps(entry_payload, sort_keys=True),
+                    entry_payload["created_at"],
+                    signature,
+                ),
+            )
         conn.commit()
         return entry_hash
 
@@ -97,16 +104,18 @@ def get_log_chain(limit: int = 100) -> list[dict[str, Any]]:
     import json
 
     with db.pool().connection() as conn:
-        _ensure_log_table(conn)
-        rows = conn.execute(
-            """
-            SELECT entry_hash, prev_hash, kind, version_id, payload_json, created_at, signature
-            FROM append_only_log
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        with conn.cursor() as cur:
+            _ensure_log_table(conn)
+            cur.execute(
+                """
+                SELECT entry_hash, prev_hash, kind, version_id, payload_json, created_at, signature
+                FROM append_only_log
+                ORDER BY id DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
     return [
         {
             "entry_hash": r[0],
@@ -114,7 +123,7 @@ def get_log_chain(limit: int = 100) -> list[dict[str, Any]]:
             "kind": r[2],
             "version_id": r[3],
             "payload": json.loads(r[4]),
-            "created_at": r[5],
+            "created_at": r[5].isoformat() if r[5] else None,
             "signature": r[6],
         }
         for r in rows
@@ -126,10 +135,12 @@ def verify_chain() -> bool:
     import json
 
     with db.pool().connection() as conn:
-        _ensure_log_table(conn)
-        rows = conn.execute(
-            "SELECT entry_hash, prev_hash, kind, version_id, payload_json FROM append_only_log ORDER BY id ASC"
-        ).fetchall()
+        with conn.cursor() as cur:
+            _ensure_log_table(conn)
+            cur.execute(
+                "SELECT entry_hash, prev_hash, kind, version_id, payload_json FROM append_only_log ORDER BY id ASC"
+            )
+            rows = cur.fetchall()
     prev = "0" * 64
     for entry_hash, prev_hash_db, kind, version_id, payload_json in rows:
         if prev_hash_db != prev:
