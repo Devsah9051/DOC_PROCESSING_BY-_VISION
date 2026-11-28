@@ -154,15 +154,14 @@ No direct config file dependencies. Uses `SECTION_ALIASES` constant and regex pa
 | 8.7 | Optional proposer with agreement gate | NOT implemented |
 | 8.8 | Sealed record, record_root, pii_ref | Complete |
 | 8.9 | Section detection: heading dictionary | Complete |
-| 8.9 | Layout, position, content shape signals | Partial (aliases + line heuristics only) |
+| 8.9 | Layout, position, content shape signals | Complete (line-based detection with typography: size_max, size_median, bold_ratio, caps_ratio, x0, gap_before; heading score with 2+ signals; gap-based section segmentation) |
 
 ---
 
 ## Next Steps
-1. Add font-size/layout/position signals to section detection
-2. Add R4 (out-of-order sections) and R10 (employment gaps) rule checks
-3. Add F2-F6 formatting rules
-4. Add Section 8.7 proposer agreement gate
+1. Add R4 (out-of-order sections) and R10 (employment gaps) rule checks
+2. Add F2-F6 formatting rules
+3. Add Section 8.7 proposer agreement gate
 
 ---
 
@@ -171,11 +170,11 @@ No direct config file dependencies. Uses `SECTION_ALIASES` constant and regex pa
 - `app/schemas.py` — DateInterval, ManipulationFlag, StructureResult models + rule/flag/label constants
 - `app/pipeline.py` — calls extract_structure(), passes track/uploaded_at
 - `stages/s5_normalise.py` — build_output() accepts structure_result
-- `tests/test_s4_structure.py` — unit tests (8 tests)
+- `tests/test_s4_structure.py` — unit tests (17 tests)
 
 ---
 
 ## Checkpoint Status
 **Status:** OPERATIONAL — spec Section 8 gaps resolved (except 8.7 proposer gate, 8.9 layout/position signals)
-**Last Verified:** 2026-11-28 — All 8 Stage 4 tests pass; 100 total tests pass (97 passed, 3 skipped without PostgreSQL)
+**Last Verified:** 2026-11-28 — All 17 Stage 4 tests pass; 109 total tests pass (106 passed, 3 skipped without PostgreSQL)
 **Next Review:** When Stage 5 normalisation is extended with skill relations

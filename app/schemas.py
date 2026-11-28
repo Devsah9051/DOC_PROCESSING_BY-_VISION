@@ -75,6 +75,8 @@ class Section(BaseModel):
     bbox: List[float] = []
     start_line: int = 0
     end_line: int = 0
+    heading_line_id: Optional[str] = None  # line id of the section heading
+    line_class: Optional[str] = None       # "HEADING" | "BODY" | "LIST_ITEM" | "PAGE_FURNITURE"
 
 
 class Field(BaseModel):
@@ -82,6 +84,23 @@ class Field(BaseModel):
     value: str
     word_ids: List[str] = []
     bbox: List[float] = []
+
+
+# ---- Stage 4: Line-level structure (Section 8) ----
+
+
+class Line(BaseModel):
+    """Line-level structure extracted from word records (Section 8)."""
+    text: str
+    bbox: List[float] = []
+    size_max: Optional[float] = None
+    size_median: Optional[float] = None
+    bold_ratio: Optional[float] = None
+    caps_ratio: Optional[float] = None
+    x0: Optional[float] = None
+    gap_before: Optional[float] = None
+    page: int = 1
+    line_class: str = "BODY"  # HEADING | BODY | LIST_ITEM | PAGE_FURNITURE
 
 
 class Phase1Output(BaseModel):
@@ -213,6 +232,7 @@ class StructureResult(BaseModel):
     record_root: str = ""
     pii_ref: str = ""
     track: str = "resume"
+    lines: List[Line] = []  # line-level structure (Section 8.8)
 
 
 # Rule family constants (Section 8.4)

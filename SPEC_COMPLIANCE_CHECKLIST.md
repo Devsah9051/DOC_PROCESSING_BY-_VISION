@@ -301,9 +301,9 @@
 | 5 Stage 1 | ~95% | All spec Section 5 requirements implemented; only encrypted non-PDF and YARA external_link for compressed PDFs remain |
 | 6 Stage 2 | ~60% | Text extraction, render, ghost diff, contrast, OCR, verdicts, block_hash, clean_artifact_sha256, DOCX/text route |
 | 7 Stage 3 | ~50% | Pre-gate/post-gate, suspicion rating, universal scan, thresholds from config |
-| 8 Stage 4 | ~75% | Structure builder, field extractor, conservation ledger, labels, M1-M5, R/F/J rules, date intervals, record_root, pii_ref; missing layout/position signals, proposer agreement gate |
+| 8 Stage 4 | ~85% | Structure builder, field extractor, conservation ledger, labels, M1-M5, R/F/J rules, date intervals, record_root, pii_ref; line-level structure (Line objects, heading detection, section segmentation, line classification HEADING/BODY/LIST_ITEM/PAGE_FURNITURE), missing layout/position signals, proposer agreement gate |
 | 9 Stage 5 | ~60% | Taxonomy + normalise + build_output; provenance/status via Stage 4 ledger; all structure data sealed in report_hash; no skill relations |
 | 10 Contracts | 0% | Not implemented |
 | 11 Failures | ~40% | FAILED not QUARANTINE for bugs; unreachable code fixed |
 | 12 Performance | ~15% | Result cache; WordIndex O(1) lookup; no benchmark |
-| 15 Tests | ~55% | 97 tests pass (94 passed, 3 skipped without PostgreSQL) |
+| 15 Tests | ~60% | 109 tests pass (106 passed, 3 skipped without PostgreSQL) |

@@ -283,5 +283,73 @@ If Stage 4 structure causes issues:
 
 ---
 
+## Decision ADR-018: Stage 1 Intake — Move register_version() After All Checks
+
+**Status:** Implemented  
+**Scope:** `stages/s1_intake.py`
+
+- `register_version()` is now called only after ALL intake checks pass (filename, size, file type, encryption, page/pixel limits, archive bomb, suspicious PDF object scan, synchronous malware scan)
+- REJECTED/BLOCKED files never leave a READY row in `version_registry`
+- Version registration happens immediately before the READY return
+
+---
+
+## Decision ADR-019: Stage 1 Intake — scan_enabled Wiring
+
+**Status:** Implemented  
+**Scope:** `stages/s1_intake.py`, `app/config.py`, `config/config.yaml`
+
+- When `scan_enabled=False` (default): `scan_file()` is skipped entirely; sanitized artifact is a passthrough of original bytes with `cdr_applied=False`, `infected=False`, no findings
+- When `scan_enabled=True`: full yara+CDR scan runs
+- Config key `scan_enabled` default remains `false`, preserving existing behavior
+
+---
+
+## Decision ADR-020: Stage 4 Structure — Typography + Line-Based Segmentation
+
+**Status:** Implemented  
+**Scope:** `stages/s4_structure.py`, `app/schemas.py`, `app/config.py`, `config/config.yaml`
+
+**New architecture:** Replaces pure alias-matching section detection with line-based structural analysis:
+
+| Component | Description |
+|-----------|-------------|
+| Line building | Group word_records by `(page, rounded y0)` into Line objects with typography metadata (size_max, size_median, bold_ratio, caps_ratio, x0, gap_before) |
+| Heading score | 2+ signals required: alias match (strong), size_max ≥ 1.2× body_median, bold_ratio ≥ 0.6, caps/Title-case, short line ≤60 chars, gap_before > gap_ratio × line_pitch |
+| Section segmentation | New section starts at each HEADING or wide gap (> gap_ratio × line_pitch) |
+| Line classification | HEADING | BODY | LIST_ITEM | PAGE_FURNITURE (same text at same position on ≥2 pages) |
+| Conditional | Gated behind `structure_layout_enabled` (default false); when off, falls back to legacy alias-only detection |
+
+**Config keys:** `structure_layout_enabled` (false), `heading_size_ratio` (1.2), `gap_ratio` (1.5)
+
+**Output:** `SanitizedArtifact.lines` populated with line-level data; `record_root` hash includes line data rounded to 1 decimal/2 decimals for determinism
+
+---
+
+## Decision ADR-021: Stage 4 — Typography Fields on WordRecord/MatchedWord
+
+**Status:** Implemented  
+**Scope:** `app/schemas.py`, `stages/s2_verify/__init__.py`, `stages/s2_verify/verdict.py`
+
+- `WordRecord` gains optional `size`, `bold`, `color`, `font` fields (additive, default None)
+- `MatchedWord` gains same optional fields
+- `_extract_text_words()` populates typography from pymupdf span data (bold = font flag 16 or font name contains bold/black/heavy)
+- `classify_text_layer()` passes typography through to MatchedWord
+- Backward compatible: OCR-only words and existing code work with None defaults
+
+---
+
+## Decision ADR-022: Stage 4 — Preserve Line Breaks in Clean Text
+
+**Status:** Implemented  
+**Scope:** `stages/s2_verify/verdict.py`
+
+- `build_clean_text()` / `_reading_order_text()` now groups words by `(page, rounded y0)` into lines and joins with `\n` between lines
+- Within each line, words sorted left-to-right by x0
+- Downstream Stage 4 structure detection benefits from preserved line structure
+
+---
+
 **Last Updated:** 2026-11-28  
-**Total Tests:** 97 (94 passed, 3 skipped without PostgreSQL)
+**Total Tests:** 109 (106 passed, 3 skipped without PostgreSQL)
+

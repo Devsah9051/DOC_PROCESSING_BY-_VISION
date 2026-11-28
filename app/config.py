@@ -40,6 +40,9 @@ class Config:
     audit_rate: float = 0.05
     injection: dict = field(default_factory=dict)
     tiny_font_max_pt: float = field(default=6.0)
+    structure_layout_enabled: bool = False
+    heading_size_ratio: float = 1.2
+    gap_ratio: float = 1.5
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Config":
@@ -79,6 +82,9 @@ class Config:
             audit_rate=float(data.get("audit_rate", 0.05)),
             injection=data.get("injection", {}),
             tiny_font_max_pt=float(data.get("tiny_font_max_pt", 6.0)),
+            structure_layout_enabled=bool(data.get("structure_layout_enabled", False)),
+            heading_size_ratio=float(data.get("heading_size_ratio", 1.2)),
+            gap_ratio=float(data.get("gap_ratio", 1.5)),
         )
 
     def weight(self, rule_id: str) -> float:

@@ -64,12 +64,20 @@
 | 59 | `tests/test_log_chain.py` | NEW: append_log chain, verify_chain true, verify_chain detects tampering | DONE |
 | 60 | `ARCHITECTURE_DECISIONS.md` | Added ADR-013 through ADR-017; updated test count to 97 | DONE |
 | 61 | `QUERY_LOG.md` | Added comprehensive entry for all 10-step hardening work | DONE |
+| 62 | `stages/s4_structure.py` | Rewrote with line-based structure detection: Line objects built from word_records grouped by page+y0, heading score (2+ signals: alias match, size≥1.2×body_median, bold_ratio≥0.6, caps, short line, gap), section segmentation at headings/wide gaps, line classification (HEADING/BODY/LIST_ITEM/PAGE_FURNITURE), gated behind `structure_layout_enabled` | DONE |
+| 63 | `app/schemas.py` | Added Line model with text, bbox, size_max, size_median, bold_ratio, caps_ratio, x0, gap_before, page, line_class; added lines field to StructureResult | DONE |
+| 64 | `app/config.py` + `config/config.yaml` | Added structure_layout_enabled (false), heading_size_ratio (1.2), gap_ratio (1.5) | DONE |
+| 65 | `stages/s2_verify/__init__.py` | Word records now carry size/bold/color/font typography from pymupdf spans | DONE |
+| 66 | `stages/s2_verify/verdict.py` | MatchedWord gains size/bold/color/font fields; build_clean_text preserves line breaks (\n between lines grouped by page+y) | DONE |
+| 66 | `tests/test_s4_structure.py` | NEW: 9 tests for layout (multi-size heading, bold heading, gap-separated sections, two-column, header/footer furniture, flag on/off, sealed lines, list item classification) | DONE |
+| 67 | `ARCHITECTURE_DECISIONS.md` | Added ADR-018 through ADR-022; updated test count to 109 | DONE |
+| 68 | `QUERY_LOG.md` | Added Stage 4 layout entry | DONE |
 
 ## Test Status
 | Metric | Value |
 |--------|-------|
-| Total tests | 100 |
-| Passed | 97 |
+| Total tests | 109 |
+| Passed | 106 |
 | Skipped | 3 (log chain tests without PostgreSQL) |
 | Failed | 0 |
 | Command | `DATABASE_URL=postgresql://postgres:password@localhost:5432/egca PYTHONPATH=. .venv/bin/pytest` |

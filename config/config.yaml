@@ -71,3 +71,8 @@ injection:
     - "http://"
     - "mailto:"
     - "file://"
+
+# Stage 4 structure layout (Section 8)
+structure_layout_enabled: false
+heading_size_ratio: 1.2
+gap_ratio: 1.5
