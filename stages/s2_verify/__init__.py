@@ -53,6 +53,8 @@ def _extract_text_words(page: pymupdf.Page, pno: int, doc) -> List[dict]:
                 if not text:
                     continue
                 bbox = tuple(span["bbox"])
+                font_name = span.get("font", "")
+                bold = bool(span.get("flags", 0) & 16) or any(k in font_name.lower() for k in ("bold", "black", "heavy"))
                 w = {
                     "word_id": _word_id(pno, bbox, text, "text_layer"),
                     "page": pno,
@@ -62,9 +64,10 @@ def _extract_text_words(page: pymupdf.Page, pno: int, doc) -> List[dict]:
                     "visible": True,
                     "flags": [],
                     "size": span.get("size", 0),
+                    "bold": bold,
                     "color": span.get("color", 0),
+                    "font": font_name,
                     "alpha": span.get("alpha", 1.0),
-                    "font": span.get("font", ""),
                     "hidden_layer": False,
                 }
                 if span.get("ocg") in ocg_off:
@@ -200,6 +203,10 @@ def verify_pages(
                         source=w["source"],
                         visible=w["visible"],
                         flags=list(w["flags"]),
+                        size=w.get("size"),
+                        bold=w.get("bold"),
+                        color=w.get("color"),
+                        font=w.get("font"),
                     )
                     for w in words
                 ],

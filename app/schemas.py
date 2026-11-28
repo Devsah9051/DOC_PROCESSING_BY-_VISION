@@ -17,6 +17,11 @@ class WordRecord(BaseModel):
     source: str
     visible: bool
     flags: List[str] = []
+    # Optional typography data (Stage 4 support — additive, defaults None)
+    size: Optional[float] = None
+    bold: Optional[bool] = None
+    color: Optional[int] = None
+    font: Optional[str] = None
 
     def __getitem__(self, key: str):
         return getattr(self, key)

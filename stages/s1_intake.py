@@ -5,6 +5,7 @@ import io
 import os
 import re
 import time
+import zipfile
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -134,6 +135,77 @@ def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> Inta
                     scan_findings=raw_findings,
                 )
 
+    # ZIP bomb check (DOCX is a ZIP) — always runs, independent of scan_enabled
+    if file_type == "docx":
+        try:
+            with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+                entries = zf.infolist()
+                if len(entries) > cfg.max_zip_entries:
+                    raw_findings.append(ScanFinding(
+                        rule_id="ZIP_ENTRY_COUNT",
+                        stage="zip",
+                        scan_layer="zip",
+                        severity="High",
+                        description=f"Too many ZIP entries: {len(entries)} > {cfg.max_zip_entries}",
+                    ))
+                    return IntakeContext(
+                        outcome="BLOCKED", sha256=sha, size_bytes=size_bytes, filename=filename,
+                        file_type=file_type, track=track,
+                        version_id="", version_seq=0, uploaded_at=uploaded_at,
+                        reason="archive_bomb",
+                        scan_findings=raw_findings,
+                    )
+                total_compressed = sum(i.compress_size for i in entries)
+                total_uncompressed = sum(i.file_size for i in entries)
+                if total_compressed > 0:
+                    ratio = total_uncompressed / total_compressed
+                    if ratio > cfg.max_compression_ratio:
+                        raw_findings.append(ScanFinding(
+                            rule_id="ZIP_BOMB_RATIO",
+                            stage="zip",
+                            scan_layer="zip",
+                            severity="High",
+                            description=f"Compression ratio {ratio:.1f}x > {cfg.max_compression_ratio}x",
+                        ))
+                        return IntakeContext(
+                            outcome="BLOCKED", sha256=sha, size_bytes=size_bytes, filename=filename,
+                            file_type=file_type, track=track,
+                            version_id="", version_seq=0, uploaded_at=uploaded_at,
+                            reason="archive_bomb",
+                            scan_findings=raw_findings,
+                        )
+                for entry in entries:
+                    if ".." in entry.filename or entry.filename.startswith("/"):
+                        raw_findings.append(ScanFinding(
+                            rule_id="ZIP_PATH_TRAVERSAL",
+                            stage="zip",
+                            scan_layer="zip",
+                            severity="High",
+                            description=f"Path traversal in ZIP entry: {entry.filename}",
+                        ))
+                        return IntakeContext(
+                            outcome="BLOCKED", sha256=sha, size_bytes=size_bytes, filename=filename,
+                            file_type=file_type, track=track,
+                            version_id="", version_seq=0, uploaded_at=uploaded_at,
+                            reason="archive_bomb",
+                            scan_findings=raw_findings,
+                        )
+        except zipfile.BadZipFile:
+            raw_findings.append(ScanFinding(
+                rule_id="BAD_ZIP",
+                stage="zip",
+                scan_layer="zip",
+                severity="High",
+                description="DOCX file is not a valid ZIP archive",
+            ))
+            return IntakeContext(
+                outcome="BLOCKED", sha256=sha, size_bytes=size_bytes, filename=filename,
+                file_type=file_type, track=track,
+                version_id="", version_seq=0, uploaded_at=uploaded_at,
+                reason="corrupt_zip",
+                scan_findings=raw_findings,
+            )
+
     # Open PDF once with pymupdf; use the same handle for encryption + structural checks
     doc = None
     page_count = 0
@@ -209,7 +281,37 @@ def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> Inta
             reason="cache_hit",
         )
 
-    # 2.4 version registry with compare-and-swap
+    # 2.6 Synchronous scan + CDR (Section 5.2) — gated by scan_enabled
+    artifact: Optional[SanitizedArtifact] = None
+    scan_findings: list[ScanFinding] = []
+    if cfg.scan_enabled:
+        artifact = scan_file(file_bytes, cfg, sha256=sha, doc=doc)
+        scan_findings = [
+            ScanFinding(
+                rule_id=f.rule_id,
+                stage=f.stage,
+                scan_layer=f.scan_layer,
+                severity=f.severity,
+                description=f.description,
+                matched_strings=f.matched_strings,
+            )
+            for f in artifact.findings
+        ]
+
+    if artifact is not None and artifact.infected:
+        # Don't close doc yet — pipeline will handle it
+        return IntakeContext(
+            outcome="BLOCKED", sha256=sha, size_bytes=size_bytes, filename=filename,
+            file_type=file_type, track=track,
+            version_id="", version_seq=0, uploaded_at=uploaded_at,
+            reason=f"scan_infected:{artifact.threat_name or 'unknown'}",
+            sanitized_artifact=artifact,
+            scan_findings=scan_findings,
+            doc=doc,
+        )
+
+    # 2.4 version registry with compare-and-swap — only after ALL checks pass
+    # A REJECTED/BLOCKED file must NOT leave a READY row in version_registry
     existing = get_version(sha, track)
     if existing is not None:
         version_id, version_seq = existing
@@ -237,38 +339,40 @@ def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> Inta
                 reason="version_register_error",
             )
 
-    # 2.6 Synchronous scan + CDR (Section 5.2)
-    artifact = scan_file(file_bytes, cfg, sha256=sha, doc=doc)
-    scan_findings = [
-        ScanFinding(
-            rule_id=f.rule_id,
-            stage=f.stage,
-            scan_layer=f.scan_layer,
-            severity=f.severity,
-            description=f.description,
-            matched_strings=f.matched_strings,
-        )
-        for f in artifact.findings
-    ]
-
-    if artifact.infected:
-        # Don't close doc yet — pipeline will handle it
+    if artifact is not None:
         return IntakeContext(
-            outcome="BLOCKED", sha256=sha, size_bytes=size_bytes, filename=filename,
+            outcome="READY", sha256=sha, size_bytes=size_bytes, filename=filename,
             file_type=file_type, track=track,
             version_id=version_id, version_seq=version_seq, uploaded_at=uploaded_at,
-            reason=f"scan_infected:{artifact.threat_name or 'unknown'}",
+            page_count=page_count, encrypted=encrypted,
+            cache_hit=False, cached_output=None, doc=doc,
             sanitized_artifact=artifact,
             scan_findings=scan_findings,
-            doc=doc,
         )
 
+    # scan_enabled=False → clean passthrough, no CDR, no findings
+    # Use original bytes as sanitized_bytes so downstream stages have something to process
+    passthrough_artifact = SanitizedArtifact(
+        sha256=sha,
+        raw_sha256=sha,
+        file_type=file_type,
+        original_size=size_bytes,
+        sanitized_size=size_bytes,
+        sanitized_bytes=file_bytes,
+        scan_engine="passthrough",
+        infected=False,
+        threat_name=None,
+        findings=[],
+        cdr_applied=False,
+        cdr_method=None,
+        scanned_at=uploaded_at,
+    )
     return IntakeContext(
         outcome="READY", sha256=sha, size_bytes=size_bytes, filename=filename,
         file_type=file_type, track=track,
         version_id=version_id, version_seq=version_seq, uploaded_at=uploaded_at,
         page_count=page_count, encrypted=encrypted,
         cache_hit=False, cached_output=None, doc=doc,
-        sanitized_artifact=artifact,
-        scan_findings=scan_findings,
+        sanitized_artifact=passthrough_artifact,
+        scan_findings=[],
     )

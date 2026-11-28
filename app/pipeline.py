@@ -8,7 +8,7 @@ import pymupdf
 
 from app.config import config
 from app.db import cache_get, cache_insert, audit_insert, scan_result_insert_full
-from app.hash import block_hash, clean_hash, record_hash, norm_hash, state_hash, idem_hash
+from app.hash import block_hash, clean_hash, record_hash, norm_hash, state_hash, idem_hash, original_sha256
 from app.log import append_log
 from app.schemas import (
     Phase1Output, Verdict, FileState, Finding, Status,
@@ -82,12 +82,12 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
         timings_ms[stage] = round((_now_ms() - start), 2)
 
     # ---- Stage 1: Intake ----
+    sha256 = original_sha256(file_bytes)
     t0 = _now_ms()
     doc = None
     try:
         ctx = intake(file_bytes, filename, upload_id, config)
         record("stage1_intake", t0)
-        sha256 = ctx.sha256
 
         if ctx.outcome == "DUPLICATE":
             # Cache hit: return stored result (Section 12.4)
@@ -151,6 +151,11 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
                         scan_engine="raw+yara+cdr",
                         infected=True,
                         threat_name=ctx.reason,
+                        sanitized_sha256=(
+                            hashlib.sha256(ctx.sanitized_artifact.sanitized_bytes).hexdigest()
+                            if ctx.sanitized_artifact and ctx.sanitized_artifact.sanitized_bytes
+                            else None
+                        ),
                         findings=[{
                             "rule_id": f.rule_id,
                             "stage": f.stage,
@@ -215,24 +220,35 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
     if doc is None:
         clean_text = sanitized_artifact.sanitized_bytes.decode("utf-8", errors="replace") if sanitized_artifact.sanitized_bytes else ""
         # Create word tokens from clean text for Structure/Normalise stages
+        # Deterministic pseudo-geometry: sequential bboxes based on word position
         matched: List = []
         word_id = 0
+        x = 0.0
         for wtext in clean_text.split():
+            width = max(len(wtext) * 6.0, 6.0)  # ~6pt per char, min width 6
             matched.append(type("WordRecord", (), {
                 "word_id": f"w{word_id}",
                 "page": 1,
-                "bbox": [0.0, 0.0, 0.0, 0.0],
+                "bbox": [round(x, 2), 0.0, round(x + width, 2), 12.0],
                 "text": wtext,
                 "source": "text_layer",
                 "visible": True,
                 "flags": [],
+                "size": 12.0,
+                "bold": False,
+                "color": 0,
+                "font": "Helvetica",
+                "classification": "VERIFIED",
             })())
+            x += width + 6.0  # word width + gap
             word_id += 1
         ocr_only: List = []
         verdict = Verdict(status="CLEAN", score=0.0, rules=[], reasons=["non_pdf_no_verify"])
         block_records = []
         parse_status = "PARSED"
-        clean_artifact_sha256 = clean_hash([clean_artifact_sha256]) if clean_artifact_sha256 else clean_hash([])
+        # Real clean_artifact_sha256 over extracted text blocks (not nested clean_hash)
+        block_hashes = [block_hash({"block_id": w.word_id, "page": w.page, "bbox": list(w.bbox), "verdict": w.classification or "UNCORROBORATED_NOT_VISIBLE"}) for w in matched]
+        clean_artifact_sha256 = clean_hash(block_hashes) if block_hashes else clean_hash([])
         record("stage2_verify", t0)  # record timing even though skipped
     else:
         # ---- Stage 2: Verify (PDF only) ----

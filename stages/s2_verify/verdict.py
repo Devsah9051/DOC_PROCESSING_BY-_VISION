@@ -50,6 +50,11 @@ class MatchedWord:
     visible: bool
     flags: List[str]
     classification: str  # VERIFIED | OCR_ONLY | MISMATCH | TEXT_ONLY | None (ocr-only words)
+    # Optional typography data (Stage 4 support — additive, defaults None)
+    size: Optional[float] = None
+    bold: Optional[bool] = None
+    color: Optional[int] = None
+    font: Optional[str] = None
 
 
 def classify_text_layer(
@@ -94,7 +99,13 @@ def classify_text_layer(
             else:
                 classification = None  # hidden text, already flagged; do not emit as token
             matched.append(
-                MatchedWord(wid, page, bbox, text, source, visible, flags, classification)
+                MatchedWord(
+                    wid, page, bbox, text, source, visible, flags, classification,
+                    size=w.get("size"),
+                    bold=w.get("bold"),
+                    color=w.get("color"),
+                    font=w.get("font"),
+                )
             )
             continue
 
@@ -107,7 +118,13 @@ def classify_text_layer(
             classification = MISMATCH
             flags.append(MISMATCH)
         matched.append(
-            MatchedWord(wid, page, bbox, text, source, visible, flags, classification)
+            MatchedWord(
+                wid, page, bbox, text, source, visible, flags, classification,
+                size=w.get("size"),
+                bold=w.get("bold"),
+                color=w.get("color"),
+                font=w.get("font"),
+            )
         )
 
     unmatched = [ocr_boxes[i] for i in range(len(ocr_boxes)) if i not in used_ocr]
@@ -175,33 +192,35 @@ def build_clean_text(matched: List[MatchedWord], ocr_only: List[OcrBox]) -> str:
 
 
 def _reading_order_text(words: List[MatchedWord]) -> str:
-    # group into columns by x-gap, then sort top-to-bottom
-    xs = sorted({round(w.bbox[0]) for w in words})
-    column_gap = None
-    for i in range(1, len(xs)):
-        gap = xs[i] - xs[i - 1]
-        if column_gap is None or gap < column_gap:
-            if gap > 20:
-                column_gap = gap if column_gap is None else min(column_gap, gap)
-    # simpler: detect a single large vertical gap across words
-    words_sorted = sorted(words, key=lambda w: (round(w.bbox[1]), round(w.bbox[0])))
-    # two-column split: if many words have x around left and right clusters
-    mid_xs = [round(w.bbox[0]) for w in words]
-    if len(mid_xs) > 4:
-        sxs = sorted(mid_xs)
-        gaps = [(sxs[i] - sxs[i - 1], i) for i in range(1, len(sxs))]
-        gaps.sort(reverse=True)
-        if gaps and gaps[0][0] > 40:
-            split_idx = gaps[0][1]
-            split_x = (sxs[split_idx - 1] + sxs[split_idx]) / 2
-            left = [w for w in words if round(w.bbox[0]) < split_x]
-            right = [w for w in words if round(w.bbox[0]) >= split_x]
-            ordered = _sort_column(left) + _sort_column(right)
-        else:
-            ordered = _sort_column(words)
-    else:
-        ordered = _sort_column(words)
-    return " ".join(w.text for w in ordered if w.text.strip())
+    """3.11 clean_text = VERIFIED + OCR_ONLY words in reading order.
+    Preserve line breaks: emit "\\n" between lines (group by page+y).
+    Sort words left-to-right within each line."""
+    if not words:
+        return ""
+
+    # Group words into lines by (page, y rounded to line tolerance ~10pt)
+    lines: dict[tuple[int, int], list[str]] = {}
+    line_order: list[tuple[int, int]] = []
+
+    for w in words:
+        if not w.text.strip():
+            continue
+        key = (w.page, round(w.bbox[1] / 10) * 10)  # Round y to nearest 10pt = line bucket
+        if key not in lines:
+            lines[key] = []
+            line_order.append(key)
+        lines[key].append(w)
+
+    # Sort line keys by (page, y)
+    line_order.sort()
+
+    # Within each line, sort words by x (left-to-right)
+    output_lines = []
+    for key in line_order:
+        line_words = sorted(lines[key], key=lambda w: round(w.bbox[0]))
+        output_lines.append(" ".join(w.text for w in line_words if w.text.strip()))
+
+    return "\n".join(output_lines)
 
 
 def _sort_column(words):

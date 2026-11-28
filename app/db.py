@@ -283,6 +283,7 @@ def scan_result_insert_full(
     findings: list[dict] | None = None,
     cdr_applied: bool = False,
     cdr_method: str | None = None,
+    sanitized_sha256: str | None = None,
     payload: dict | None = None,
 ) -> None:
     import json
@@ -308,6 +309,7 @@ def scan_result_insert_full(
                     json.dumps({
                         "original_size": original_size,
                         "sanitized_size": sanitized_size,
+                        "sanitized_sha256": sanitized_sha256,
                         "findings": findings or [],
                         "cdr_applied": cdr_applied,
                         "cdr_method": cdr_method,
