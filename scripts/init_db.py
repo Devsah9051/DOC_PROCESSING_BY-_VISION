@@ -19,11 +19,13 @@ CREATE TABLE IF NOT EXISTS version_registry (
     version_id TEXT PRIMARY KEY,
     sha256 TEXT NOT NULL,
     track TEXT NOT NULL,
+    job TEXT,                                     -- job id (nullable; e.g. JD reference for job_description track)
     version_seq INTEGER NOT NULL,
     owner TEXT NOT NULL,
     outcome TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (sha256, track)
+    UNIQUE (sha256, track),                       -- legacy constraint kept for backward compatibility
+    UNIQUE (owner, job, track)                    -- spec rev4 §5.3 key: owner + job + track
 );
 
 -- Transactional outbox for reliable event publishing (Section 5.3).

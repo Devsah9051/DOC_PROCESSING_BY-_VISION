@@ -244,3 +244,123 @@ def oversized_pdf():
     doc.save(buf, deflate=True)
     doc.close()
     return buf.getvalue()
+
+
+# --- Stream B: version_registry key (owner, job, track) per spec §5.3 ---
+
+def test_intake_same_sha_track_different_job_distinct_versions(clean_pdf_bytes, monkeypatch):
+    """Same sha256 + track but different job → register_version called with different job (spec §5.3)."""
+    from app import db
+    import stages.s1_intake as s1
+
+    calls = []
+
+    def fake_get_version(owner, job, track):
+        return None  # no existing version
+
+    def fake_register_version(owner, job, track, version_seq, outcome, sha256=None):
+        calls.append((owner, job, track, version_seq, outcome, sha256))
+        return True
+
+    monkeypatch.setattr(db, "get_version", fake_get_version)
+    monkeypatch.setattr(db, "register_version", fake_register_version)
+    monkeypatch.setattr(s1, "get_version", fake_get_version)
+    monkeypatch.setattr(s1, "register_version", fake_register_version)
+
+    # Same file, same owner, same track, different job
+    ctx1 = intake(clean_pdf_bytes, "jd_engineer.pdf", "u1", job="eng-1")
+    ctx2 = intake(clean_pdf_bytes, "jd_manager.pdf", "u1", job="mgr-1")
+
+    assert ctx1.outcome == "READY"
+    assert ctx2.outcome == "READY"
+    assert ctx1.job == "eng-1"
+    assert ctx2.job == "mgr-1"
+    assert ctx1.track == ctx2.track == "job_description"
+
+    # register_version called with different jobs
+    job_args = [c[1] for c in calls]
+    assert "eng-1" in job_args
+    assert "mgr-1" in job_args
+    assert len(calls) == 2
+
+
+def test_intake_rejected_file_no_ready_row(clean_pdf_bytes, monkeypatch):
+    """Rejected file must NOT call register_version (no READY row in version_registry)."""
+    from app import db
+    import stages.s1_intake as s1
+
+    register_calls = []
+
+    def fake_get_version(owner, job, track):
+        return None
+
+    def fake_register_version(owner, job, track, version_seq, outcome, sha256=None):
+        register_calls.append((owner, job, track))
+        return True
+
+    monkeypatch.setattr(db, "get_version", fake_get_version)
+    monkeypatch.setattr(db, "register_version", fake_register_version)
+    monkeypatch.setattr(s1, "get_version", fake_get_version)
+    monkeypatch.setattr(s1, "register_version", fake_register_version)
+
+    # Unsafe filename → REJECTED, should not register
+    ctx = intake(clean_pdf_bytes, "file;rm -rf.pdf", "u1")
+    assert ctx.outcome == "REJECTED"
+    assert ctx.reason == "unsafe_filename"
+    assert len(register_calls) == 0, "register_version must not be called for REJECTED files"
+
+
+def test_intake_job_derived_from_filename_jd_track(clean_pdf_bytes, monkeypatch):
+    """job is derived from filename for job_description track when not explicitly passed."""
+    from app import db
+    import stages.s1_intake as s1
+
+    register_calls = []
+
+    def fake_get_version(owner, job, track):
+        return None
+
+    def fake_register_version(owner, job, track, version_seq, outcome, sha256=None):
+        register_calls.append((owner, job, track))
+        return True
+
+    monkeypatch.setattr(db, "get_version", fake_get_version)
+    monkeypatch.setattr(db, "register_version", fake_register_version)
+    monkeypatch.setattr(s1, "get_version", fake_get_version)
+    monkeypatch.setattr(s1, "register_version", fake_register_version)
+
+    ctx = intake(clean_pdf_bytes, "senior_engineer_jd.pdf", "u1")
+    assert ctx.track == "job_description"
+    assert ctx.job == "senior_engineer_jd"  # derived from filename stem
+
+    # register_version called with derived job
+    assert len(register_calls) == 1
+    assert register_calls[0][1] == "senior_engineer_jd"
+
+
+def test_intake_job_none_for_resume_track(clean_pdf_bytes, monkeypatch):
+    """job is None for resume track (not job_description)."""
+    from app import db
+    import stages.s1_intake as s1
+
+    register_calls = []
+
+    def fake_get_version(owner, job, track):
+        return None
+
+    def fake_register_version(owner, job, track, version_seq, outcome, sha256=None):
+        register_calls.append((owner, job, track))
+        return True
+
+    monkeypatch.setattr(db, "get_version", fake_get_version)
+    monkeypatch.setattr(db, "register_version", fake_register_version)
+    monkeypatch.setattr(s1, "get_version", fake_get_version)
+    monkeypatch.setattr(s1, "register_version", fake_register_version)
+
+    ctx = intake(clean_pdf_bytes, "resume.pdf", "u1")
+    assert ctx.track == "resume"
+    assert ctx.job is None
+
+    # register_version called with job=None
+    assert len(register_calls) == 1
+    assert register_calls[0][1] is None

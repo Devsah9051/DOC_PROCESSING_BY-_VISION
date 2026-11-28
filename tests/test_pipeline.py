@@ -187,3 +187,104 @@ def test_text_end_to_end():
     assert out.prev_hash
     assert out.report_hash
     assert out.signature
+
+
+# ---- Stream A: seal attests raw + sanitized bytes ----
+
+def test_raw_sanitized_hashes_present(clean_pdf):
+    """raw_sha256 and sanitized_sha256 are populated on Phase1Output."""
+    import hashlib
+    out = _run(clean_pdf)
+    assert out.raw_sha256 is not None
+    assert out.sanitized_sha256 is not None
+    # raw_sha256 is the hash of original upload bytes
+    assert out.raw_sha256 == hashlib.sha256(clean_pdf).hexdigest()
+
+
+def test_raw_hash_stable_for_same_upload(clean_pdf):
+    """raw_sha256 is stable for the same upload bytes."""
+    out1 = _run(clean_pdf, upload_id="u1")
+    out2 = _run(clean_pdf, upload_id="u2")
+    assert out1.raw_sha256 == out2.raw_sha256
+
+
+def test_sanitized_hash_changes_report_hash(clean_pdf, monkeypatch):
+    """Changing sanitized bytes changes report_hash; raw_sha256 stays stable."""
+    import hashlib
+    import stages.s1_intake as s1_mod
+    import app.scanner as scanner_mod
+    from app.schemas import SanitizedArtifact
+    import app.config as config_mod
+
+    # Force scan_enabled so scan_file is invoked
+    config_mod.config.scan_enabled = True
+
+    captured = {}
+
+    def fake_scan(file_bytes, cfg, sha256=None, doc=None):
+        captured["raw_sha256"] = hashlib.sha256(file_bytes).hexdigest()
+        san = hashlib.sha256(file_bytes + b"-sanitized").hexdigest()
+        captured["sanitized_sha256_v1"] = san
+        return SanitizedArtifact(
+            sha256=san,
+            raw_sha256=sha256,
+            file_type="pdf",
+            original_size=len(file_bytes),
+            sanitized_size=len(file_bytes + b"-sanitized"),
+            sanitized_bytes=file_bytes + b"-sanitized",
+            scan_engine="yara+cdr",
+            infected=False,
+            threat_name=None,
+            findings=[],
+            cdr_applied=True,
+            cdr_method="pdf_images",
+            scanned_at=0.0,
+        )
+
+    monkeypatch.setattr(s1_mod, "scan_file", fake_scan)
+
+    out1 = _run(clean_pdf, upload_id="u-san1")
+    if "raw_sha256" not in captured:
+        # scan_file was not called; scan_enabled may not have taken effect.
+        # Retry by directly patching the intake module's config reference.
+        s1_mod.config.scan_enabled = True
+        monkeypatch.setattr(s1_mod, "scan_file", fake_scan)
+        out1 = _run(clean_pdf, upload_id="u-san1-retry")
+
+    assert "raw_sha256" in captured, "scan_file was not invoked; check scan_enabled"
+    assert out1.raw_sha256 == captured["raw_sha256"]
+    assert out1.sanitized_sha256 == captured["sanitized_sha256_v1"]
+
+    # Same upload, same sanitized → same report_hash
+    out2 = _run(clean_pdf, upload_id="u-san2")
+    assert out1.report_hash == out2.report_hash
+    assert out1.raw_sha256 == out2.raw_sha256
+
+    # Different sanitized bytes → different report_hash
+    def fake_scan_v2(file_bytes, cfg, sha256=None, doc=None):
+        san = hashlib.sha256(file_bytes + b"-sanitized-v2").hexdigest()
+        return SanitizedArtifact(
+            sha256=san,
+            raw_sha256=sha256,
+            file_type="pdf",
+            original_size=len(file_bytes),
+            sanitized_size=len(file_bytes + b"-sanitized-v2"),
+            sanitized_bytes=file_bytes + b"-sanitized-v2",
+            scan_engine="yara+cdr",
+            infected=False,
+            threat_name=None,
+            findings=[],
+            cdr_applied=True,
+            cdr_method="pdf_images",
+            scanned_at=0.0,
+        )
+
+    monkeypatch.setattr(s1_mod, "scan_file", fake_scan_v2)
+    out3 = _run(clean_pdf, upload_id="u-san3")
+    assert out3.raw_sha256 == out1.raw_sha256  # raw unchanged
+    assert out3.sanitized_sha256 != out1.sanitized_sha256  # sanitized changed
+    assert out3.report_hash != out1.report_hash  # report_hash changed
+
+    # Reset scan_enabled to avoid affecting other tests
+    config_mod.config.scan_enabled = False
+    s1_mod.config.scan_enabled = False

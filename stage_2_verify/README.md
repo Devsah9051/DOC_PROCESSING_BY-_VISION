@@ -15,6 +15,8 @@ Core verification layer — text extraction, rule scanning, render/ghost-diff/co
 - Compute verdict: CLEAN / REVIEW / QUARANTINE
 - Compute block_hash per block (Section 4.2 hash chain)
 - Compute clean_artifact_sha256 = clean_hash of all block hashes
+- Word records carry typography (size, bold, color, font) for Stage 4 layout detection
+- Clean text preserves line breaks (\n between lines grouped by page + y)
 
 ## Submodules
 - `__init__.py` — `verify_pages()` main entry

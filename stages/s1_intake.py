@@ -34,9 +34,10 @@ class IntakeContext:
     filename: str
     file_type: str
     track: str
-    version_id: str
-    version_seq: int
-    uploaded_at: float
+    job: Optional[str] = None  # job id (nullable; spec §5.3 key component)
+    version_id: str = ""
+    version_seq: int = 0
+    uploaded_at: float = 0.0
     quarantine_pointer: Optional[str] = None
     page_count: int = 0
     encrypted: bool = False
@@ -71,13 +72,18 @@ def _build_version_id(sha256: str, seq: int) -> str:
     return f"{sha256[:16]}:v{seq}"
 
 
-def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> IntakeContext:
+def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config, job: Optional[str] = None) -> IntakeContext:
     sha = sha256_of(file_bytes)
     size_bytes = len(file_bytes)
     file_type, _, _ = magic_byte_check(file_bytes)
     track = detect_track(filename)
     uploaded_at = time.time()
     raw_findings: list[ScanFinding] = []
+
+    # Derive job from filename for job_description track (spec §5.3 key: owner+job+track)
+    if job is None and track == "job_description":
+        stem = os.path.splitext(os.path.basename(filename))[0]
+        job = stem or None
 
     # 2.1 safe filename
     if not is_safe_filename(filename):
@@ -275,7 +281,7 @@ def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> Inta
     if cached is not None:
         return IntakeContext(
             outcome="DUPLICATE", sha256=sha, size_bytes=size_bytes, filename=filename,
-            file_type=file_type, track=track,
+            file_type=file_type, track=track, job=job,
             version_id="", version_seq=0, uploaded_at=uploaded_at,
             cache_hit=True, cached_output=cached,
             reason="cache_hit",
@@ -312,29 +318,29 @@ def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> Inta
 
     # 2.4 version registry with compare-and-swap — only after ALL checks pass
     # A REJECTED/BLOCKED file must NOT leave a READY row in version_registry
-    existing = get_version(sha, track)
+    existing = get_version(upload_id, job, track)
     if existing is not None:
         version_id, version_seq = existing
     else:
         version_seq = 1
         version_id = _build_version_id(sha, version_seq)
         try:
-            registered = register_version(sha, track, upload_id, version_seq, "READY")
+            registered = register_version(upload_id, job, track, version_seq, "READY", sha256=sha)
             if not registered:
-                existing = get_version(sha, track)
+                existing = get_version(upload_id, job, track)
                 if existing is not None:
                     version_id, version_seq = existing
                 else:
                     return IntakeContext(
                         outcome="EXPIRED", sha256=sha, size_bytes=size_bytes, filename=filename,
-                        file_type=file_type, track=track,
+                        file_type=file_type, track=track, job=job,
                         version_id="", version_seq=0, uploaded_at=uploaded_at,
                         reason="version_register_failed",
                     )
         except Exception:
             return IntakeContext(
                 outcome="EXPIRED", sha256=sha, size_bytes=size_bytes, filename=filename,
-                file_type=file_type, track=track,
+                file_type=file_type, track=track, job=job,
                 version_id="", version_seq=0, uploaded_at=uploaded_at,
                 reason="version_register_error",
             )
@@ -342,7 +348,7 @@ def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> Inta
     if artifact is not None:
         return IntakeContext(
             outcome="READY", sha256=sha, size_bytes=size_bytes, filename=filename,
-            file_type=file_type, track=track,
+            file_type=file_type, track=track, job=job,
             version_id=version_id, version_seq=version_seq, uploaded_at=uploaded_at,
             page_count=page_count, encrypted=encrypted,
             cache_hit=False, cached_output=None, doc=doc,
@@ -369,7 +375,7 @@ def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> Inta
     )
     return IntakeContext(
         outcome="READY", sha256=sha, size_bytes=size_bytes, filename=filename,
-        file_type=file_type, track=track,
+        file_type=file_type, track=track, job=job,
         version_id=version_id, version_seq=version_seq, uploaded_at=uploaded_at,
         page_count=page_count, encrypted=encrypted,
         cache_hit=False, cached_output=None, doc=doc,

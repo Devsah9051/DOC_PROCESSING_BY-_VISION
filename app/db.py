@@ -106,30 +106,31 @@ def audit_insert(upload_id: str, sha256: str, status: str, rules: list, quaranti
 
 # ---- version registry (Section 5.3) ----
 
-def get_version(sha256: str, track: str) -> Optional[tuple[str, int]]:
-    """Return (version_id, version_seq) if a version already exists for (sha256, track)."""
+def get_version(owner: str, job: str | None, track: str) -> Optional[tuple[str, int]]:
+    """Return (version_id, version_seq) if a version already exists for (owner, job, track)."""
     with pool().connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT version_id, version_seq FROM version_registry "
-                "WHERE sha256=%s AND track=%s ORDER BY version_seq DESC LIMIT 1",
-                (sha256, track),
+                "WHERE owner=%s AND job IS NOT DISTINCT FROM %s AND track=%s "
+                "ORDER BY version_seq DESC LIMIT 1",
+                (owner, job, track),
             )
             row = cur.fetchone()
             return (row[0], row[1]) if row else None
 
 
-def register_version(sha256: str, track: str, owner: str, version_seq: int, outcome: str) -> bool:
+def register_version(owner: str, job: str | None, track: str, version_seq: int, outcome: str, sha256: str | None = None) -> bool:
     """Compare-and-swap register a new version. Returns True if we won the CAS."""
-    version_id = f"{sha256[:16]}:v{version_seq}"
+    version_id = f"{(sha256 or owner)[:16]}:v{version_seq}"
     with pool().connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO version_registry (version_id, sha256, track, version_seq, owner, outcome) "
-                "VALUES (%s,%s,%s,%s,%s,%s) "
-                "ON CONFLICT (sha256, track) DO NOTHING "
+                "INSERT INTO version_registry (version_id, sha256, track, job, version_seq, owner, outcome) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT (owner, job, track) DO NOTHING "
                 "RETURNING version_id",
-                (version_id, sha256, track, version_seq, owner, outcome),
+                (version_id, sha256, track, job, version_seq, owner, outcome),
             )
             row = cur.fetchone()
             conn.commit()

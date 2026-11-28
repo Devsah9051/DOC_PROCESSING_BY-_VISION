@@ -69,15 +69,23 @@
 | 64 | `app/config.py` + `config/config.yaml` | Added structure_layout_enabled (false), heading_size_ratio (1.2), gap_ratio (1.5) | DONE |
 | 65 | `stages/s2_verify/__init__.py` | Word records now carry size/bold/color/font typography from pymupdf spans | DONE |
 | 66 | `stages/s2_verify/verdict.py` | MatchedWord gains size/bold/color/font fields; build_clean_text preserves line breaks (\n between lines grouped by page+y) | DONE |
-| 66 | `tests/test_s4_structure.py` | NEW: 9 tests for layout (multi-size heading, bold heading, gap-separated sections, two-column, header/footer furniture, flag on/off, sealed lines, list item classification) | DONE |
-| 67 | `ARCHITECTURE_DECISIONS.md` | Added ADR-018 through ADR-022; updated test count to 109 | DONE |
-| 68 | `QUERY_LOG.md` | Added Stage 4 layout entry | DONE |
+| 67 | `tests/test_s4_structure.py` | NEW: 9 tests for layout (multi-size heading, bold heading, gap-separated sections, two-column, header/footer furniture, flag on/off, sealed lines, list item classification) | DONE |
+| 68 | `ARCHITECTURE_DECISIONS.md` | Added ADR-018 through ADR-022; updated test count to 109 | DONE |
+| 69 | `QUERY_LOG.md` | Added Stage 4 layout entry | DONE |
+| 70 | `app/schemas.py` | Added `sanitized_bytes: Optional[bytes]` to `SanitizedArtifact` (missing field used by pipeline); added `raw_sha256`/`sanitized_sha256` optional fields to `Phase1Output` (Stream A seal attestation) | DONE |
+| 71 | `stages/s5_normalise.py` | `build_output`/`compute_report_hash` accept `raw_sha256`/`sanitized_sha256`; both included in report_hash dump | DONE |
+| 72 | `app/pipeline.py` | Passes `raw_sha256=sha256` and `sanitized_sha256=sanitized_artifact.sha256` to `build_output` | DONE |
+| 73 | `tests/test_pipeline.py` | NEW: 3 tests — raw_sanitized_hashes_present, raw_hash_stable_for_same_upload, sanitized_hash_changes_report_hash | DONE |
+| 74 | `scripts/init_db.py` | version_registry: added `job TEXT` column; changed UNIQUE from `(sha256, track)` to `(owner, job, track)` per spec §5.3; legacy `(sha256, track)` constraint kept | DONE |
+| 75 | `app/db.py` | `get_version(owner, job, track)` and `register_version(owner, job, track, ...)` use `(owner, job, track)` CAS key; `sha256` stored as column but not part of unique key | DONE |
+| 76 | `stages/s1_intake.py` | Added `job` parameter to `intake()`; derived from filename stem for job_description track; `get_version`/`register_version` called with `(upload_id, job, track)` | DONE |
+| 77 | `tests/test_s1_intake.py` | NEW: 4 tests — same sha+track different job → distinct versions; rejected file leaves no READY row; job derived from filename for JD track; job=None for resume track | DONE |
 
 ## Test Status
 | Metric | Value |
 |--------|-------|
-| Total tests | 109 |
-| Passed | 106 |
+| Total tests | 116 |
+| Passed | 113 |
 | Skipped | 3 (log chain tests without PostgreSQL) |
 | Failed | 0 |
 | Command | `DATABASE_URL=postgresql://postgres:password@localhost:5432/egca PYTHONPATH=. .venv/bin/pytest` |

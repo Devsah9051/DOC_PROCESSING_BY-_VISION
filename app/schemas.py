@@ -115,6 +115,9 @@ class Phase1Output(BaseModel):
     signature: str
     # Stage 2 hash chain (Section 4.2)
     clean_artifact_sha256: Optional[str] = None
+    # Seal attestation: original and sanitized bytes (Stream A)
+    raw_sha256: Optional[str] = None
+    sanitized_sha256: Optional[str] = None
     # Stage 4 structure output (Section 8.8)
     structure_record_root: Optional[str] = None
     structure_pii_ref: Optional[str] = None
@@ -194,6 +197,7 @@ class SanitizedArtifact(BaseModel):
     cdr_applied: bool = False
     cdr_method: Optional[str] = None
     sanitized_artifact_uri: Optional[str] = None  # derived artifact storage URI
+    sanitized_bytes: Optional[bytes] = None  # raw sanitized bytes for downstream processing
     scanned_at: float = 0.0
 
 

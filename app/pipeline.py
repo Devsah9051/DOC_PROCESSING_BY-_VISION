@@ -396,6 +396,8 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
             prev_hash=sha256,
             structure_result=structure_result,
             clean_artifact_sha256=clean_artifact_sha256,
+            raw_sha256=sha256,
+            sanitized_sha256=sanitized_artifact.sha256 if sanitized_artifact else None,
         )
 
         try:

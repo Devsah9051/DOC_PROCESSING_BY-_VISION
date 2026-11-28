@@ -84,6 +84,8 @@ def build_output(
     file_state: Optional[FileState] = None,
     structure_result: Optional[StructureResult] = None,
     clean_artifact_sha256: Optional[str] = None,
+    raw_sha256: Optional[str] = None,
+    sanitized_sha256: Optional[str] = None,
 ) -> Phase1Output:
     """6.2 Build Phase1Output with report_hash (stage5_root) and signature."""
     output = Phase1Output(
@@ -97,6 +99,8 @@ def build_output(
         report_hash="",
         signature="",
         clean_artifact_sha256=clean_artifact_sha256,
+        raw_sha256=raw_sha256,
+        sanitized_sha256=sanitized_sha256,
     )
     if structure_result:
         output.structure_record_root = structure_result.record_root
@@ -121,6 +125,8 @@ def build_output(
         file_state=file_state,
         structure_result=structure_result,
         clean_artifact_sha256=clean_artifact_sha256,
+        raw_sha256=raw_sha256,
+        sanitized_sha256=sanitized_sha256,
     )
     output.report_hash = report_hash
     fs_hash = state_hash(file_state.model_dump() if file_state else {})
@@ -137,6 +143,8 @@ def compute_report_hash(
     file_state: Optional[FileState] = None,
     structure_result: Optional[StructureResult] = None,
     clean_artifact_sha256: Optional[str] = None,
+    raw_sha256: Optional[str] = None,
+    sanitized_sha256: Optional[str] = None,
 ) -> str:
     """Compute stage5_root (report_hash) deterministically, excluding timings_ms.
 
@@ -144,7 +152,8 @@ def compute_report_hash(
     structure_record_root, structure_pii_ref, structure_labels, structure_rule_flags,
     structure_manipulation_flags, structure_date_intervals, structure_conservation_ledger,
     structure_track.
-    Also includes clean_artifact_sha256 (Stage 2 hash chain root).
+    Also includes clean_artifact_sha256 (Stage 2 hash chain root),
+    raw_sha256 (original upload bytes), and sanitized_sha256 (sanitized artifact bytes).
     """
     dump = {
         "sections": [_dump_item(s) for s in sections],
@@ -154,6 +163,8 @@ def compute_report_hash(
         "versions": versions,
         "prev_hash": prev_hash,
         "clean_artifact_sha256": clean_artifact_sha256,
+        "raw_sha256": raw_sha256,
+        "sanitized_sha256": sanitized_sha256,
         "structure_record_root": structure_result.record_root if structure_result else None,
         "structure_pii_ref": structure_result.pii_ref if structure_result else None,
         "structure_labels": structure_result.labels if structure_result else [],
