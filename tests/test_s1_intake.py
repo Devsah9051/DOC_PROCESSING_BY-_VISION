@@ -6,7 +6,8 @@ import zipfile
 import pymupdf
 import pytest
 
-from stages.s1_intake import intake, Stage1Error, IntakeContext, detect_file_type, is_safe_filename
+from stages.s1_intake import intake, Stage1Error, IntakeContext, is_safe_filename
+from app.scanner import magic_byte_check
 
 
 def _make_docx() -> bytes:
@@ -36,22 +37,26 @@ def _make_pdf_with_js() -> bytes:
     return raw
 
 
-# --- detect_file_type ---
+# --- magic_byte_check ---
 
 def test_detect_pdf(clean_pdf_bytes):
-    assert detect_file_type(clean_pdf_bytes) == "pdf"
+    ft, _, _ = magic_byte_check(clean_pdf_bytes)
+    assert ft == "pdf"
 
 
 def test_detect_docx():
-    assert detect_file_type(_make_docx()) == "docx"
+    ft, _, _ = magic_byte_check(_make_docx())
+    assert ft == "docx"
 
 
 def test_detect_text():
-    assert detect_file_type(b"Hello world\nThis is plain text.") == "text"
+    ft, _, _ = magic_byte_check(b"Hello world\nThis is plain text.")
+    assert ft == "text"
 
 
 def test_detect_unknown():
-    assert detect_file_type(b"\xff\xfe\x00binary") == "unknown"
+    ft, _, _ = magic_byte_check(b"\xff\xfe\x00binary")
+    assert ft == "unknown"
 
 
 # --- is_safe_filename ---
@@ -117,7 +122,7 @@ def test_intake_docx_ready():
 def test_intake_docx_archive_bomb_blocked():
     ctx = intake(_make_bomb_docx(), "resume.docx", "u1")
     assert ctx.outcome == "BLOCKED"
-    assert ctx.reason == "archive_bomb"
+    assert "archive_bomb" in ctx.reason or "ZIP_BOMB_RATIO" in ctx.reason
 
 
 def test_intake_docx_unsafe_filename_rejected():

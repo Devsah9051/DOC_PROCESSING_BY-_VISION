@@ -403,17 +403,32 @@ def yara_scan(file_bytes: bytes) -> list[ScanFinding]:
 
 # --- Step 4: Structural Parse Check (runs even on no-findings branch) ---
 
-def structural_parse_check(file_bytes: bytes, file_type: str) -> Optional[ScanFinding]:
+def structural_parse_check(file_bytes: bytes, file_type: str, doc=None) -> Optional[ScanFinding]:
     """Validate that the file can be structurally parsed.
 
-    For PDF: try pikepdf first, fall back to pymupdf
-    For DOCX: defusedxml parse of word/document.xml
-    For text: no structural check needed
+    For PDF: if a pymupdf doc handle is provided, iterate pages with
+    page.read_contents() on that handle. Otherwise fall back to pikepdf/pymupdf.
+    For DOCX: defusedxml parse of word/document.xml.
+    For text: no structural check needed.
 
     Returns finding if parsing fails, None if safe.
     """
     if file_type == "pdf":
-        # Try pikepdf first (more strict structural validation)
+        # If a pymupdf doc handle is already open (from intake), use it.
+        if doc is not None:
+            try:
+                for page in doc:
+                    _ = page.read_contents()
+                return None  # structural check passed
+            except Exception as exc:
+                return ScanFinding(
+                    rule_id="PDF_STRUCTURAL_INVALID",
+                    stage="structural",
+                    scan_layer="structural",
+                    severity="High",
+                    description=f"PDF structural validation failed: {exc}",
+                )
+        # No doc handle provided — fall back to pikepdf/pymupdf
         try:
             with pikepdf.open(io.BytesIO(file_bytes)) as pdf:
                 _ = pdf.pages
@@ -583,7 +598,7 @@ def cdr_reconstruct_pdf_full(file_bytes: bytes, dpi: int = 200) -> tuple[bytes, 
 
 # --- Main scan pipeline ---
 
-def scan_file(file_bytes: bytes, cfg=config) -> SanitizedArtifact:
+def scan_file(file_bytes: bytes, cfg=config, sha256: str | None = None, doc=None) -> SanitizedArtifact:
     """Run the scanner pipeline with conditional CDR.
 
     Refined flow:
@@ -598,7 +613,8 @@ def scan_file(file_bytes: bytes, cfg=config) -> SanitizedArtifact:
     """
     import time
 
-    sha256 = hashlib.sha256(file_bytes).hexdigest()
+    if sha256 is None:
+        sha256 = hashlib.sha256(file_bytes).hexdigest()
     raw_sha256 = sha256  # immutable hash of original upload
     original_size = len(file_bytes)
     findings: list[ScanFinding] = []
@@ -628,26 +644,28 @@ def scan_file(file_bytes: bytes, cfg=config) -> SanitizedArtifact:
         )
 
     # Step 2: Encryption Check (before YARA can't see inside)
-    enc_finding = encryption_check(file_bytes, file_type)
-    if enc_finding:
-        findings.append(enc_finding)
-        infected = True
-        threat_name = enc_finding.rule_id
-        return SanitizedArtifact(
-            sha256=sha256,
-            raw_sha256=raw_sha256,
-            file_type=file_type,
-            original_size=original_size,
-            sanitized_size=0,
-            sanitized_bytes=b"",
-            scan_engine="yara+cdr",
-            infected=infected,
-            threat_name=threat_name,
-            findings=findings,
-            cdr_applied=False,
-            cdr_method=None,
-            scanned_at=time.time(),
-        )
+    # Skip if doc was already opened and checked in intake()
+    if doc is None:
+        enc_finding = encryption_check(file_bytes, file_type)
+        if enc_finding:
+            findings.append(enc_finding)
+            infected = True
+            threat_name = enc_finding.rule_id
+            return SanitizedArtifact(
+                sha256=sha256,
+                raw_sha256=raw_sha256,
+                file_type=file_type,
+                original_size=original_size,
+                sanitized_size=0,
+                sanitized_bytes=b"",
+                scan_engine="yara+cdr",
+                infected=infected,
+                threat_name=threat_name,
+                findings=findings,
+                cdr_applied=False,
+                cdr_method=None,
+                scanned_at=time.time(),
+            )
 
     # Step 3: Zip-Bomb Guard (DOCX only)
     zip_finding = zip_bomb_guard(file_bytes, file_type, cfg)
@@ -700,7 +718,7 @@ def scan_file(file_bytes: bytes, cfg=config) -> SanitizedArtifact:
 
     # Step 5: Structural Parse Check — runs even on No findings branch
     # This catches malformed/corrupt files that YARA missed
-    struct_finding = structural_parse_check(file_bytes, file_type)
+    struct_finding = structural_parse_check(file_bytes, file_type, doc=doc)
     if struct_finding:
         findings.append(struct_finding)
         infected = True

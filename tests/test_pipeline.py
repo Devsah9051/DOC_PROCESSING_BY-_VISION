@@ -78,6 +78,7 @@ def test_cache_hit_returns_cached(clean_pdf):
                 outcome = "DUPLICATE"
                 cache_hit = True
                 cached_output = cached
+                sha256 = "cached_sha256"
             intake_mock.return_value = Ctx()
             out = run_phase1(clean_pdf, "x.pdf", "u-cache")
     assert out.verdict.status == "CLEAN"

@@ -8,7 +8,7 @@ import pymupdf
 
 from app.config import config
 from app.db import cache_get, cache_insert, audit_insert, scan_result_insert_full
-from app.hash import original_sha256, block_hash, clean_hash, record_hash, norm_hash, state_hash, idem_hash
+from app.hash import block_hash, clean_hash, record_hash, norm_hash, state_hash, idem_hash
 from app.log import append_log
 from app.schemas import (
     Phase1Output, Verdict, FileState, Finding, Status,
@@ -77,7 +77,6 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
         "pipeline_version": config.pipeline_version,
         "rules_version": config.rules_version,
     }
-    sha256 = original_sha256(file_bytes)
 
     def record(stage: str, start: float):
         timings_ms[stage] = round((_now_ms() - start), 2)
@@ -88,6 +87,7 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
     try:
         ctx = intake(file_bytes, filename, upload_id, config)
         record("stage1_intake", t0)
+        sha256 = ctx.sha256
 
         if ctx.outcome == "DUPLICATE":
             # Cache hit: return stored result (Section 12.4)

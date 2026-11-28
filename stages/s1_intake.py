@@ -5,7 +5,6 @@ import io
 import os
 import re
 import time
-import zipfile
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -13,7 +12,7 @@ import pymupdf
 
 from app.config import config
 from app.db import cache_get, get_version, register_version, scan_result_insert_full
-from app.scanner import scan_file, SanitizedArtifact, ScanFinding
+from app.scanner import scan_file, SanitizedArtifact, ScanFinding, magic_byte_check
 
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 PDF_HEADER = b"%PDF-"
@@ -53,18 +52,6 @@ def sha256_of(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def detect_file_type(file_bytes: bytes) -> str:
-    if file_bytes.startswith(PDF_HEADER):
-        return "pdf"
-    if file_bytes.startswith(DOCX_HEADER):
-        return "docx"
-    try:
-        file_bytes.decode("utf-8")
-        return "text"
-    except UnicodeDecodeError:
-        return "unknown"
-
-
 def is_safe_filename(filename: str) -> bool:
     name = os.path.basename(filename)
     if not name or name in (".", ".."):
@@ -86,9 +73,10 @@ def _build_version_id(sha256: str, seq: int) -> str:
 def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> IntakeContext:
     sha = sha256_of(file_bytes)
     size_bytes = len(file_bytes)
-    file_type = detect_file_type(file_bytes)
+    file_type, _, _ = magic_byte_check(file_bytes)
     track = detect_track(filename)
     uploaded_at = time.time()
+    raw_findings: list[ScanFinding] = []
 
     # 2.1 safe filename
     if not is_safe_filename(filename):
@@ -116,60 +104,6 @@ def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> Inta
             version_id="", version_seq=0, uploaded_at=uploaded_at,
             reason="unsupported_file_type",
         )
-
-    # 2.2 archive bomb (DOCX is a ZIP) — fast pre-check before scanner
-    raw_findings: list[ScanFinding] = []
-    try:
-        with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
-            entries = zf.infolist()
-            if len(entries) > cfg.max_zip_entries:
-                raw_findings.append(ScanFinding(
-                    rule_id="ZIP_ENTRY_COUNT",
-                    stage="zip",
-                    scan_layer="zip",
-                    severity="High",
-                    description=f"Too many ZIP entries: {len(entries)} > {cfg.max_zip_entries}",
-                ))
-                return IntakeContext(
-                    outcome="BLOCKED", sha256=sha, size_bytes=size_bytes, filename=filename,
-                    file_type=file_type, track=track,
-                    version_id="", version_seq=0, uploaded_at=uploaded_at,
-                    reason="archive_bomb",
-                    scan_findings=raw_findings,
-                )
-            total_compressed = sum(i.compress_size for i in entries)
-            total_uncompressed = sum(i.file_size for i in entries)
-            if total_compressed > 0 and total_uncompressed / total_compressed > cfg.max_compression_ratio:
-                raw_findings.append(ScanFinding(
-                    rule_id="ZIP_BOMB_RATIO",
-                    stage="zip",
-                    scan_layer="zip",
-                    severity="High",
-                    description=f"Compression ratio {total_uncompressed / total_compressed:.1f}x > {cfg.max_compression_ratio}x",
-                ))
-                return IntakeContext(
-                    outcome="BLOCKED", sha256=sha, size_bytes=size_bytes, filename=filename,
-                    file_type=file_type, track=track,
-                    version_id="", version_seq=0, uploaded_at=uploaded_at,
-                    reason="archive_bomb",
-                    scan_findings=raw_findings,
-                )
-    except zipfile.BadZipFile:
-        if file_type == "docx":
-            raw_findings.append(ScanFinding(
-                rule_id="BAD_ZIP",
-                stage="zip",
-                scan_layer="zip",
-                severity="High",
-                description="DOCX file is not a valid ZIP archive",
-            ))
-            return IntakeContext(
-                outcome="BLOCKED", sha256=sha, size_bytes=size_bytes, filename=filename,
-                file_type=file_type, track=track,
-                version_id="", version_seq=0, uploaded_at=uploaded_at,
-                reason="corrupt_zip",
-                scan_findings=raw_findings,
-            )
 
     # 2.1 %PDF- header + PDF object tree scan
     if file_type == "pdf":
@@ -199,6 +133,70 @@ def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> Inta
                     reason=f"suspicious_pdf_object:{pattern_name}",
                     scan_findings=raw_findings,
                 )
+
+    # Open PDF once with pymupdf; use the same handle for encryption + structural checks
+    doc = None
+    page_count = 0
+    encrypted = False
+    if file_type == "pdf":
+        try:
+            doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+        except Exception as exc:
+            return IntakeContext(
+                outcome="REJECTED", sha256=sha, size_bytes=size_bytes, filename=filename,
+                file_type=file_type, track=track,
+                version_id="", version_seq=0, uploaded_at=uploaded_at,
+                reason=f"cannot_open: {exc}",
+            )
+        if doc.is_encrypted:
+            doc.close()
+            return IntakeContext(
+                outcome="REJECTED", sha256=sha, size_bytes=size_bytes, filename=filename,
+                file_type=file_type, track=track,
+                version_id="", version_seq=0, uploaded_at=uploaded_at,
+                reason="encrypted",
+            )
+        # Structural check: iterate pages with read_contents() on the same handle
+        try:
+            for page in doc:
+                _ = page.read_contents()
+        except Exception as exc:
+            doc.close()
+            return IntakeContext(
+                outcome="REJECTED", sha256=sha, size_bytes=size_bytes, filename=filename,
+                file_type=file_type, track=track,
+                version_id="", version_seq=0, uploaded_at=uploaded_at,
+                reason=f"page_read_failed: {exc}",
+            )
+        if doc.page_count > cfg.max_pages:
+            doc.close()
+            return IntakeContext(
+                outcome="REJECTED", sha256=sha, size_bytes=size_bytes, filename=filename,
+                file_type=file_type, track=track,
+                version_id="", version_seq=0, uploaded_at=uploaded_at,
+                reason="too_many_pages",
+            )
+        for page in doc:
+            try:
+                pix = page.get_pixmap(dpi=cfg.dpi)
+            except Exception as exc:
+                doc.close()
+                return IntakeContext(
+                    outcome="REJECTED", sha256=sha, size_bytes=size_bytes, filename=filename,
+                    file_type=file_type, track=track,
+                    version_id="", version_seq=0, uploaded_at=uploaded_at,
+                    reason=f"page_render_failed: {exc}",
+                )
+            if pix.width * pix.height > cfg.max_pixels:
+                doc.close()
+                return IntakeContext(
+                    outcome="REJECTED", sha256=sha, size_bytes=size_bytes, filename=filename,
+                    file_type=file_type, track=track,
+                    version_id="", version_seq=0, uploaded_at=uploaded_at,
+                    reason="page_exceeds_max_pixels",
+                )
+        page_count = doc.page_count
+        encrypted = bool(doc.is_encrypted)
 
     # 2.3 cache lookup (sha256 + versions)
     cached = cache_get(sha, cfg.pipeline_version, cfg.rules_version)
@@ -239,60 +237,8 @@ def intake(file_bytes: bytes, filename: str, upload_id: str, cfg=config) -> Inta
                 reason="version_register_error",
             )
 
-    # 2.5 open with fitz; reject encrypted / corrupt (PDF only)
-    doc = None
-    page_count = 0
-    encrypted = False
-    if file_type == "pdf":
-        try:
-            doc = pymupdf.open(stream=file_bytes, filetype="pdf")
-        except Exception as exc:
-            return IntakeContext(
-                outcome="REJECTED", sha256=sha, size_bytes=size_bytes, filename=filename,
-                file_type=file_type, track=track,
-                version_id=version_id, version_seq=version_seq, uploaded_at=uploaded_at,
-                reason=f"cannot_open: {exc}",
-            )
-        if doc.is_encrypted:
-            doc.close()
-            return IntakeContext(
-                outcome="REJECTED", sha256=sha, size_bytes=size_bytes, filename=filename,
-                file_type=file_type, track=track,
-                version_id=version_id, version_seq=version_seq, uploaded_at=uploaded_at,
-                reason="encrypted",
-            )
-        if doc.page_count > cfg.max_pages:
-            doc.close()
-            return IntakeContext(
-                outcome="REJECTED", sha256=sha, size_bytes=size_bytes, filename=filename,
-                file_type=file_type, track=track,
-                version_id=version_id, version_seq=version_seq, uploaded_at=uploaded_at,
-                reason="too_many_pages",
-            )
-        for page in doc:
-            try:
-                pix = page.get_pixmap(dpi=cfg.dpi)
-            except Exception as exc:
-                doc.close()
-                return IntakeContext(
-                    outcome="REJECTED", sha256=sha, size_bytes=size_bytes, filename=filename,
-                    file_type=file_type, track=track,
-                    version_id=version_id, version_seq=version_seq, uploaded_at=uploaded_at,
-                    reason=f"page_render_failed: {exc}",
-                )
-            if pix.width * pix.height > cfg.max_pixels:
-                doc.close()
-                return IntakeContext(
-                    outcome="REJECTED", sha256=sha, size_bytes=size_bytes, filename=filename,
-                    file_type=file_type, track=track,
-                    version_id=version_id, version_seq=version_seq, uploaded_at=uploaded_at,
-                    reason="page_exceeds_max_pixels",
-                )
-        page_count = doc.page_count
-        encrypted = bool(doc.is_encrypted)
-
     # 2.6 Synchronous scan + CDR (Section 5.2)
-    artifact = scan_file(file_bytes, cfg)
+    artifact = scan_file(file_bytes, cfg, sha256=sha, doc=doc)
     scan_findings = [
         ScanFinding(
             rule_id=f.rule_id,
