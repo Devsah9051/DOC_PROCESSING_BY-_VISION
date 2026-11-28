@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel
 
 # --- Status / Risk Tier (Section 7.4) ---
@@ -89,6 +89,15 @@ class Phase1Output(BaseModel):
     prev_hash: str
     report_hash: str
     signature: str
+    # Stage 4 structure output (Section 8.8)
+    structure_record_root: Optional[str] = None
+    structure_pii_ref: Optional[str] = None
+    structure_labels: List[Dict[str, str]] = []
+    structure_rule_flags: List[str] = []
+    structure_manipulation_flags: List[ManipulationFlag] = []
+    structure_date_intervals: List[DateInterval] = []
+    structure_conservation_ledger: List[Dict] = []
+    structure_track: Optional[str] = None
 
 
 class IntakeResult(BaseModel):
@@ -159,3 +168,80 @@ class SanitizedArtifact(BaseModel):
     cdr_method: Optional[str] = None
     sanitized_artifact_uri: Optional[str] = None  # derived artifact storage URI
     scanned_at: float = 0.0
+
+
+# ---- Stage 4: Structure models (Section 8) ----
+
+
+class DateInterval(BaseModel):
+    """A date range with start/end and optional 'Present' marker (Section 8.3)."""
+    start: Optional[str] = None  # ISO date string
+    end: Optional[str] = None
+    is_present: bool = False
+    raw_text: str = ""
+    word_ids: List[str] = []
+    bbox: List[float] = []
+
+
+class ManipulationFlag(BaseModel):
+    """M1-M5 manipulation flag with evidence (Section 8.5)."""
+    flag_id: str
+    rule_id: str
+    evidence: str
+    severity: str  # High / Medium / Low
+    bbox: List[float] = []
+    word_ids: List[str] = []
+
+
+class StructureResult(BaseModel):
+    """Complete Stage 4 output (Section 8.8)."""
+    sections: List[Section] = []
+    fields: List[Field] = []
+    date_intervals: List[DateInterval] = []
+    labels: List[Dict[str, str]] = []
+    rule_flags: List[str] = []
+    manipulation_flags: List[ManipulationFlag] = []
+    conservation_ledger: List[Dict] = []
+    record_root: str = ""
+    pii_ref: str = ""
+    track: str = "resume"
+
+
+# Rule family constants (Section 8.4)
+RULE_R1 = "R1_MISSING_REQUIRED_SECTION"
+RULE_R2 = "R2_DUPLICATE_SECTION"
+RULE_R3 = "R3_EMPTY_SECTION"
+RULE_R4 = "R4_OUT_OF_ORDER_SECTIONS"
+RULE_R5 = "R5_UNKNOWN_SECTION"
+RULE_R6 = "R6_INVALID_EMAIL_FORMAT"
+RULE_R7 = "R7_INVALID_PHONE_FORMAT"
+RULE_R8 = "R8_DATE_IN_FUTURE"
+RULE_R9 = "R9_END_BEFORE_START"
+RULE_R10 = "R10_GAP_IN_EMPLOYMENT"
+RULE_R11 = "R11_INCONSISTENT_DATE_FORMAT"
+
+RULE_F1 = "F1_MIXED_DATE_FORMATS"
+RULE_F2 = "F2_INCONSISTENT_FONT_SIZES"
+RULE_F3 = "F3_OVERLAPPING_TEXT_BLOCKS"
+RULE_F4 = "F4_TEXT_OUTSIDE_MARGINS"
+RULE_F5 = "F5_UNUSUAL_CHARACTER_SPACING"
+RULE_F6 = "F6_WATERMARK_OR_BACKGROUND"
+
+RULE_J1 = "J1_MISSING_REQUIREMENTS_SECTION"
+RULE_J2 = "J2_MISSING_RESPONSIBILITIES"
+RULE_J3 = "J3_VAGUE_QUALIFICATIONS"
+
+FLAG_M1 = "M1_HIDDEN_TEXT"
+FLAG_M2 = "M2_REMAPPED_GLYPH"
+FLAG_M3 = "M3_OVERLAPPING_BBOX"
+FLAG_M4 = "M4_TEXT_OUTSIDE_VISIBLE"
+FLAG_M5 = "M5_ANOMALOUS_FONT_MAP"
+
+LABEL_CONTRADICTION = "CONTRADICTION"
+LABEL_CONFLICT = "CONFLICT"
+LABEL_FACT = "FACT"
+LABEL_NOT_EVALUATED = "NOT_EVALUATED"
+
+# Rebuild models with forward references (Phase1Output references StructureResult)
+Phase1Output.model_rebuild()
+StructureResult.model_rebuild()

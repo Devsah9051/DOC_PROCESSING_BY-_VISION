@@ -138,11 +138,11 @@ Stage 2 trusts Stage 1's scan results. Clean files (`cdr_applied=False`) go thro
 | `tests/test_pipeline.py` | Integration tests — cache hit, corrupt, oversized, injection, hash stability, versions/timings |
 | `tests/test_s2_verify.py` | 16 tests — font anomalies, injection, classification, verdict computation |
 | `tests/test_s3_govern.py` | 3 tests — pre-gate clean, post-gate clean, post-gate quarantine |
-| `tests/test_s4_structure.py` | Section/field extraction |
+| `tests/test_s4_structure.py` | 8 tests — sections, fields, date intervals, rule flags, labels, manipulation flags, JD track, sealed output |
 | `tests/test_s5_normalise.py` | Canonical skills, unknown skills, hash/seal |
 | `tests/test_seal.py` | Seal roundtrip, deterministic fields |
 
-**Total: 84 tests, all passing.**
+**Total: 91 tests, all passing.**
 
 **Command:** `DATABASE_URL=postgresql://postgres:password@localhost:5432/egca PYTHONPATH=. .venv/bin/pytest`
 
@@ -169,7 +169,55 @@ If conditional CDR causes issues:
 3. To restore universal CDR (old behavior), modify `scan_file()` to always call `cdr_reconstruct()` regardless of findings
 4. To disable structural parse check, remove the `structural_parse_check()` call from `scan_file()`
 
+If Stage 4 structure causes issues:
+1. The `extract_structure()` replacement is fully backward-incompatible; pipeline gracefully falls back to empty `StructureResult` on exception
+2. Set `track="resume"` default to disable JD-specific rules (J1-J3)
+
 ---
 
-**Last Updated:** 2026-11-27  
-**Total Tests:** 84 passing
+## Decision ADR-011: Stage 4 Structure — Replaced Thin Extractor with Full Spec-Compliant Implementation
+
+**Status:** Implemented  
+**Scope:** `stages/s4_structure.py`, `app/schemas.py`, `app/pipeline.py`, `stages/s5_normalise.py`
+
+### Before (thin skeleton)
+`extract_structure(clean_text, word_records)` returned `(List[Section], List[Field])` with:
+- Linear `O(n*m)` word lookup via `_find_word_id()` (buggy with duplicate words)
+- Only email/phone/date field extraction via regex
+- Basic date consistency checks (future dates, end-before-start)
+- No conservation ledger, no labels, no manipulation flags, no sealed output
+
+### After (spec-compliant Stage 4)
+`extract_structure(clean_text, word_records, track, uploaded_at)` returns `StructureResult` with:
+
+| Feature | Spec Ref | Implementation |
+|---------|----------|----------------|
+| WordIndex O(1) lookup | 8.1 | `WordIndex` class replaces `_find_word_id()` |
+| Section detection | 8.9 | Alias matching + line-based heuristics |
+| Date intervals | 8.3 | `DateInterval` with start/end, `is_present` → `as_of` from `uploaded_at` |
+| Labels | 8.4 | `CONTRADICTION`, `CONFLICT`, `FACT`, `NOT_EVALUATED` |
+| Rule families | 8.4 | R1-R11, F1-F6, J1-J3 |
+| Manipulation flags | 8.5 | M1-M5 from Stage 2 findings |
+| Conservation ledger | 8.2 | Append-only `List[Dict]` audit entries |
+| Sealed output | 8.8 | `record_root` (record_hash), `pii_ref` (SHA-256 of PII fields) |
+| JD track | 8.6 | J1-J3 rules when `track="job_description"` |
+
+### Optimizations
+- `WordIndex`: `O(1)` text→word_id lookup vs `O(n*m)` linear scan
+- `lookup()` (peek) vs `find()` (consume): prevents word double-consumption between section detection and field extraction
+- Memoized date parsing: `_parse_date_cached()` avoids re-parsing duplicate date strings
+
+---
+
+## Decision ADR-012: Stage 5 Normalise — Integrated Structure Output
+
+**Status:** Implemented  
+**Scope:** `stages/s5_normalise.py`, `app/schemas.py`
+
+`build_output()` now accepts optional `structure_result: StructureResult` and populates:
+- `structure_record_root`, `structure_pii_ref`
+- `structure_labels`, `structure_rule_flags`, `structure_manipulation_flags`
+- `structure_date_intervals`, `structure_conservation_ledger`, `structure_track`
+
+**Last Updated:** 2026-11-28  
+**Total Tests:** 91 passing

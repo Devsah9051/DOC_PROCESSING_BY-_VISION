@@ -11,7 +11,9 @@ from app.config import config
 from app.db import cache_insert
 from app.hash import norm_hash, state_hash
 from app.seal import seal_fields
-from app.schemas import Phase1Output, WordRecord, FileState
+from app.schemas import (
+    Phase1Output, WordRecord, FileState, StructureResult,
+)
 
 
 TAXONOMY_PATH = Path(__file__).resolve().parent.parent / "config" / "taxonomy.yaml"
@@ -80,6 +82,7 @@ def build_output(
     timings_ms: dict,
     prev_hash: str,
     file_state: Optional[FileState] = None,
+    structure_result: Optional[StructureResult] = None,
 ) -> Phase1Output:
     """6.2 Build Phase1Output with report_hash (stage5_root) and signature."""
     output = Phase1Output(
@@ -93,6 +96,20 @@ def build_output(
         report_hash="",
         signature="",
     )
+    if structure_result:
+        output.structure_record_root = structure_result.record_root
+        output.structure_pii_ref = structure_result.pii_ref
+        output.structure_labels = structure_result.labels
+        output.structure_rule_flags = structure_result.rule_flags
+        output.structure_manipulation_flags = [
+            mf.model_dump() for mf in structure_result.manipulation_flags
+        ]
+        output.structure_date_intervals = [
+            di.model_dump() for di in structure_result.date_intervals
+        ]
+        output.structure_conservation_ledger = structure_result.conservation_ledger
+        output.structure_track = structure_result.track
+
     report_hash = compute_report_hash(
         sections=sections,
         tokens=tokens,

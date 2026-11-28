@@ -18,7 +18,7 @@ from app.seal import seal_fields
 from stages.s1_intake import intake, Stage1Error
 from stages.s2_verify import verify_pages
 from stages.s3_govern import govern_pre, govern_post
-from stages.s4_structure import extract_structure
+from stages.s4_structure import extract_structure, StructureResult
 from stages.s5_normalise import load_taxonomy, normalise_tokens, build_output, write_cache
 
 
@@ -307,12 +307,25 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
 
     # ---- Stage 4: Structure (clean_text only) ----
     t0 = _now_ms()
+    structure_result: Optional[StructureResult] = None
     try:
-        sections, fields = extract_structure(clean_text, matched + ocr_only)
+        structure_result = extract_structure(
+            clean_text,
+            matched + ocr_only,
+            track=ctx.track,
+            uploaded_at=ctx.uploaded_at,
+        )
         record("stage4_structure", t0)
     except Exception as exc:
         record("stage4_structure", t0)
-        sections, fields = [], []
+        structure_result = StructureResult(
+            sections=[],
+            fields=[],
+            track=ctx.track,
+        )
+
+    sections = structure_result.sections if structure_result else []
+    fields = structure_result.fields if structure_result else []
 
     # ---- Stage 5: Normalise + Seal ----
     t0 = _now_ms()
@@ -329,6 +342,7 @@ def run_phase1(file_bytes: bytes, filename: str, upload_id: str) -> Phase1Output
             versions=versions,
             timings_ms=timings_ms,
             prev_hash=sha256,
+            structure_result=structure_result,
         )
 
         try:

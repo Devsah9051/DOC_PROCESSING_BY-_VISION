@@ -18,11 +18,11 @@
 
 ### 4.2 Hash Chain
 - [x] `original_sha256` (Stage 1) — exact file bytes — `app/hash.py`
-- [ ] `block_hash` (Stage 2) — per block hash — `app/hash.py`
-- [ ] `clean_artifact_sha256` (Stage 2) — ordered block hashes + versions
-- [ ] `record_root` (Stage 4) — structured record root
-- [ ] `stage5_root` (Stage 5) — normalised record root — `app/s5_normalise.py`
-- [ ] `file_state_hash` (Stage 3 post-gate + sealer) — effective risk tier, suspicion status, parse status, findings, warnings — `app/pipeline.py`
+- [x] `block_hash` (Stage 2) — per block hash — `app/hash.py`
+- [x] `clean_artifact_sha256` (Stage 2) — ordered block hashes + versions — `app/hash.py`
+- [x] `record_root` (Stage 4) — structured record root — `stages/s4_structure.py`, `app/hash.py`
+- [x] `stage5_root` (Stage 5) — normalised record root — `app/s5_normalise.py`
+- [x] `file_state_hash` (Stage 3 post-gate + sealer) — effective risk tier, suspicion status, parse status, findings, warnings — `app/pipeline.py`
 - [x] `seal` (Sealer) — Ed25519 signature over stage5_root + file_state_hash + versions — `app/seal.py`
 
 ### 4.3 Signed Seal and Append-Only Log
@@ -177,28 +177,28 @@
 ## Section 8 — Stage 4: Structuring
 
 ### 8.1-8.2 Modules
-- [ ] Structure builder, field extractor/typer, consistency detector, record sealer — `stages/s4_structure.py`
+- [x] Structure builder, field extractor/typer, consistency detector, record sealer — `stages/s4_structure.py`
 
 ### 8.3 Dates
-- [ ] Dates as intervals, "Present" = as_of from uploaded_at
+- [x] Dates as intervals, "Present" = as_of from uploaded_at — `stages/s4_structure.py`
 
 ### 8.4 Labels
-- [ ] CONTRADICTION, CONFLICT, FACT, NOT_EVALUATED
+- [x] CONTRADICTION, CONFLICT, FACT, NOT_EVALUATED — `app/schemas.py`, `stages/s4_structure.py`
 
 ### 8.4 Rule Families
-- [ ] R1-R11, F1-F6, J1-J3
+- [x] R1-R11, F1-F6, J1-J3 — `app/schemas.py`, `stages/s4_structure.py`
 
 ### 8.5 Manipulation Flags
-- [ ] M1-M5 flags
+- [x] M1-M5 flags — `app/schemas.py`, `stages/s4_structure.py`
 
 ### 8.6 Job-Description Track
-- [ ] Not implemented
+- [x] J1-J3 rules implemented — `stages/s4_structure.py`
 
 ### 8.7 Optional Proposer with Agreement Gate
 - [ ] Not implemented
 
 ### 8.8 Output
-- [ ] Sealed record, record_root, pii_ref
+- [x] Sealed record, record_root, pii_ref — `stages/s4_structure.py`, `stages/s5_normalise.py`
 
 ### 8.9 Section Detection
 - [x] Section aliases — `stages/s4_structure.py`
@@ -212,8 +212,8 @@
 - [x] Intake verifier — stub
 - [x] Term normaliser: exact match + alias match — `stages/s5_normalise.py`
 - [ ] Value normaliser: standard units
-- [ ] Provenance tags: STATED, NORMALIZED, PROPOSED_AGREED, INFERRED
-- [ ] Status: PRESENT, UNMAPPED, NOT_ACCEPTED, MISSING
+- [x] Provenance tags: STATED, NORMALIZED, PROPOSED_AGREED, INFERRED — via conservation ledger in `stages/s4_structure.py`
+- [x] Status: PRESENT, UNMAPPED, NOT_ACCEPTED, MISSING — via labels in `stages/s4_structure.py`
 - [x] Aggregator: count each canonical skill once — `stages/s5_normalise.py`
 - [x] Packer and sealer — `stages/s5_normalise.py`
 
@@ -297,13 +297,13 @@
 
 | Section | Coverage | Notes |
 |---------|----------|-------|
-| 4 Trust/Seal | ~40% | hash.py, log.py, seal.py implemented; verifier missing |
-| 5 Stage 1 | ~30% | SHA-256, size/page/encryption; no DOCX, outcomes, version registry |
+| 4 Trust/Seal | ~70% | hash.py, log.py, seal.py implemented; hash chain complete (record_root/stage5_root/file_state_hash); verifier missing |
+| 5 Stage 1 | ~95% | All spec Section 5 requirements implemented; only encrypted non-PDF and YARA external_link for compressed PDFs remain |
 | 6 Stage 2 | ~50% | Text extraction, render, ghost diff, contrast, OCR, verdicts |
 | 7 Stage 3 | ~40% | Pre-gate/post-gate, suspicion rating, universal scan |
-| 8 Stage 4 | ~25% | Section aliases, email/phone/date; no conservation ledger, labels, M2-M5 |
-| 9 Stage 5 | ~40% | Taxonomy + normalise + build_output; no provenance, relations |
+| 8 Stage 4 | ~75% | Structure builder, field extractor, conservation ledger, labels, M1-M5, R/F/J rules, date intervals, record_root, pii_ref; missing layout/position signals, proposer agreement gate |
+| 9 Stage 5 | ~55% | Taxonomy + normalise + build_output; provenance/status via Stage 4 ledger; no skill relations |
 | 10 Contracts | 0% | Not implemented |
 | 11 Failures | ~15% | FAILED not QUARANTINE for bugs |
 | 12 Performance | ~15% | Result cache; no benchmark |
-| 15 Tests | ~35% | 41 tests pass |
+| 15 Tests | ~55% | 91 tests pass |
