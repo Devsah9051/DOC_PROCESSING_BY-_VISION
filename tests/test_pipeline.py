@@ -164,6 +164,18 @@ def test_docx_end_to_end():
     assert out.signature
 
 
+def test_normal_resume_with_metadata_links_is_clean(normal_resume_with_metadata_links):
+    """Clean resume with /Metadata, /Annot, and https link → CLEAN (Informational findings, 0 suspicion)."""
+    out = _run(normal_resume_with_metadata_links, "resume.pdf")
+    assert out.verdict.status == "CLEAN", out.verdict.reasons
+
+
+def test_javascript_pdf_quarantined(javascript_pdf):
+    """PDF with /JavaScript (High severity) → QUARANTINE."""
+    out = _run(javascript_pdf, "malicious.pdf")
+    assert out.verdict.status == "QUARANTINE", out.verdict.reasons
+
+
 def test_text_end_to_end():
     """Plain text file passes through Stage 1, skips Stage 2 verify,
     reaches Stage 4/5 with text tokens."""

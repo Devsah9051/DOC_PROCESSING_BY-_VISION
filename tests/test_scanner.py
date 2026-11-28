@@ -154,18 +154,43 @@ class TestScanFile:
         assert result.raw_sha256 == _sha(CLEAN_PDF)
         assert result.sha256 == _sha(CLEAN_PDF)
 
-    def test_text_with_external_links_medium_cdr_skipped(self):
-        """Text file with http:// links gets Medium finding but CDR skipped (text passthrough)."""
+    def test_text_with_external_links_informational(self):
+        """Text file with http:// links → Informational finding, not infected, no CDR."""
         text_with_link = b"See https://example.com for more details."
         result = scan_file(text_with_link)
         assert result.file_type == "text"
-        # External links are Medium severity → not infected
+        # External links are now Informational severity → not infected
         assert result.infected is False
         # Text files skip CDR (passthrough)
         assert result.cdr_applied is False
         assert result.sanitized_bytes == text_with_link
         assert len(result.findings) > 0
         assert any("external_link" in f.rule_id.lower() for f in result.findings)
+        assert all(f.severity == "Informational" for f in result.findings)
+
+    def test_pdf_metadata_links_informational_clean(self):
+        """PDF with /Metadata, /Annot, https link → Informational only, CLEAN, no CDR."""
+        import pymupdf
+        doc = pymupdf.open()
+        page = doc.new_page(width=612, height=792)
+        page.insert_text((72, 72), "Jane Doe", fontsize=16)
+        page.insert_link({"kind": pymupdf.LINK_URI, "uri": "https://linkedin.com/in/janedoe", "from": pymupdf.Rect(72, 200, 250, 216)})
+        doc.set_metadata({"author": "Jane Doe", "subject": "Resume"})
+        buf = __import__("io").BytesIO()
+        doc.save(buf, deflate=True)
+        doc.close()
+        pdf_bytes = buf.getvalue()
+
+        result = scan_file(pdf_bytes)
+        assert result.file_type == "pdf"
+        assert result.infected is False
+        assert result.cdr_applied is False  # Informational → no CDR
+        assert result.sanitized_bytes == pdf_bytes  # original bytes preserved
+        # Should have Informational findings for metadata and links
+        assert len(result.findings) > 0
+        info_findings = [f for f in result.findings if f.severity == "Informational"]
+        assert len(info_findings) > 0
+        assert all(f.severity == "Informational" for f in result.findings)
 
     def test_pdf_structural_invalid_blocked(self):
         """Malformed PDF with valid header but corrupt structure → BLOCKED."""

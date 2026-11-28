@@ -144,6 +144,8 @@ def govern_post(
     if scan_findings:
         for f in scan_findings:
             sev = f.get("severity", "Medium")
+            if sev == "Informational":
+                continue  # Informational findings add 0 to suspicion
             findings.append(Finding(
                 rule_id=f.get("rule_id", "SCAN_FINDING"),
                 evidence=f.get("description", ""),
@@ -151,7 +153,9 @@ def govern_post(
             ))
 
     # CDR applied means Stage 1 found medium-severity issues that required sanitization
-    if cdr_applied:
+    # Only add CDR_APPLIED if there are actual Medium findings (not just Informational)
+    has_medium = any(f.get("severity") == "Medium" for f in (scan_findings or []))
+    if cdr_applied and has_medium:
         findings.append(Finding(
             rule_id="CDR_APPLIED",
             evidence="Stage 1 applied CDR sanitization due to YARA findings",

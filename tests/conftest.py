@@ -216,3 +216,37 @@ def oversized_pdf() -> bytes:
     doc.save(buf, deflate=True)
     doc.close()
     return buf.getvalue()
+
+
+@pytest.fixture
+def normal_resume_with_metadata_links() -> bytes:
+    """Clean resume with /Metadata, /Annot, and https link (Informational only → CLEAN)."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_text((72, 72), "Jane Doe", fontsize=16)
+    page.insert_text((72, 96), "Software Engineer", fontsize=12)
+    page.insert_text((72, 140), "Experience", fontsize=13, color=(0.2, 0.4, 0.8))
+    page.insert_text((72, 160), "Python developer at Acme Corp", fontsize=11)
+    # Add a link annotation
+    page.insert_link({"kind": pymupdf.LINK_URI, "uri": "https://linkedin.com/in/janedoe", "from": pymupdf.Rect(72, 200, 250, 216)})
+    # Add a text annotation
+    page.add_text_annot(pymupdf.Point(72, 250), "Review notes")
+    # Set metadata
+    doc.set_metadata({"author": "Jane Doe", "subject": "Resume"})
+    buf = io.BytesIO()
+    doc.save(buf, deflate=True)
+    doc.close()
+    return buf.getvalue()
+
+
+@pytest.fixture
+def javascript_pdf() -> bytes:
+    """PDF with /JavaScript (High severity → QUARANTINE)."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_text((72, 72), "Malicious PDF", fontsize=16)
+    buf = io.BytesIO()
+    doc.save(buf, deflate=True)
+    doc.close()
+    # Append /JavaScript to trigger YARA detection
+    return buf.getvalue() + b'\n/JavaScript << /JS (app.alert(1)) >>\n'

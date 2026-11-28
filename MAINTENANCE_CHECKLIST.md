@@ -68,8 +68,8 @@
 ## Test Status
 | Metric | Value |
 |--------|-------|
-| Total tests | 97 |
-| Passed | 94 |
+| Total tests | 100 |
+| Passed | 97 |
 | Skipped | 3 (log chain tests without PostgreSQL) |
 | Failed | 0 |
 | Command | `DATABASE_URL=postgresql://postgres:password@localhost:5432/egca PYTHONPATH=. .venv/bin/pytest` |

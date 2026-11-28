@@ -102,8 +102,8 @@ rule pdf_aa_high {
 
 rule pdf_annotations_medium {
     meta:
-        description = "Detects PDF Annotations (Medium - safe to strip)"
-        severity = "Medium"
+        description = "Detects PDF Annotations (Informational - scan only)"
+        severity = "Informational"
     strings:
         $annot = /\/Annot\s*/
         $widget = /\/Widget\s*/
@@ -115,8 +115,8 @@ rule pdf_annotations_medium {
 
 rule pdf_metadata_medium {
     meta:
-        description = "Detects PDF Metadata/XMP (Medium - safe to strip)"
-        severity = "Medium"
+        description = "Detects PDF Metadata/XMP (Informational - scan only)"
+        severity = "Informational"
     strings:
         $metadata = /\/Metadata\s*/
     condition:
@@ -125,8 +125,8 @@ rule pdf_metadata_medium {
 
 rule pdf_acroform_medium {
     meta:
-        description = "Detects PDF AcroForm (Medium - safe to strip if non-XFA)"
-        severity = "Medium"
+        description = "Detects PDF AcroForm (Informational - scan only)"
+        severity = "Informational"
     strings:
         $acroform = /\/AcroForm\s*/
     condition:
@@ -156,8 +156,8 @@ rule dde_auto_high {
 
 rule external_link_medium {
     meta:
-        description = "Detects external HTTP/HTTPS links (Medium - safe to strip)"
-        severity = "Medium"
+        description = "Detects external HTTP/HTTPS links (Informational - scan only)"
+        severity = "Informational"
     strings:
         $http = "http://"
         $https = "https://"
@@ -178,8 +178,8 @@ rule zip_path_traversal_high {
 
 rule docx_custom_props_medium {
     meta:
-        description = "Detects DOCX custom properties (Medium - safe to strip)"
-        severity = "Medium"
+        description = "Detects DOCX custom properties (Informational - scan only)"
+        severity = "Informational"
     strings:
         $custom = "docProps/custom.xml"
     condition:
@@ -695,6 +695,7 @@ def scan_file(file_bytes: bytes, cfg=config, sha256: str | None = None, doc=None
 
     high_findings = [f for f in yara_findings if f.severity == "High"]
     medium_findings = [f for f in yara_findings if f.severity == "Medium"]
+    # Informational findings: record only, add 0 to suspicion, no CDR
 
     # High-severity findings → BLOCKED (quarantine, never strip)
     if high_findings:
@@ -753,6 +754,24 @@ def scan_file(file_bytes: bytes, cfg=config, sha256: str | None = None, doc=None
             infected=False,
             threat_name=None,
             findings=[],
+            cdr_applied=False,
+            cdr_method=None,
+            scanned_at=time.time(),
+        )
+
+    # Only Informational findings → no CDR, just record them
+    if not medium_findings:
+        return SanitizedArtifact(
+            sha256=sha256,
+            raw_sha256=raw_sha256,
+            file_type=file_type,
+            original_size=original_size,
+            sanitized_size=original_size,
+            sanitized_bytes=file_bytes,
+            scan_engine="yara+cdr",
+            infected=False,
+            threat_name=None,
+            findings=findings,
             cdr_applied=False,
             cdr_method=None,
             scanned_at=time.time(),
