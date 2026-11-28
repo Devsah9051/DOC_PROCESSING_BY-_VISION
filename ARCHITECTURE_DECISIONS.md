@@ -133,13 +133,13 @@ Stage 2 trusts Stage 1's scan results. Clean files (`cdr_applied=False`) go thro
 
 | File | Tests |
 |------|-------|
-| `tests/test_scanner.py` | 20 tests — magic byte, zip bomb, yara, CDR (full + targeted), clean passthrough, infected, external links, raw sha256, structural invalid, schema validation, legacy compat |
+| `tests/test_scanner.py` | 22 tests — magic byte, zip bomb, yara, CDR (full + targeted), clean passthrough, infected, external links, raw sha256, structural invalid, schema validation, legacy compat |
 | `tests/test_s1_intake.py` | 21 tests — file type detection, safe filename, outcomes, version fields, cache hit, pipeline integration |
 | `tests/test_pipeline.py` | 17 tests — clean/corrupt/oversized/injection, hash stability, cache hit, DOCX/text end-to-end, versions/timings |
-| `tests/test_s2_verify.py` | 16 tests — font anomalies, injection, classification, verdict computation |
+| `tests/test_s2_verify.py` | 17 tests — font anomalies, injection, classification, verdict computation |
 | `tests/test_s3_govern.py` | 3 tests — pre-gate clean, post-gate clean, post-gate quarantine |
 | `tests/test_s4_structure.py` | 8 tests — sections, fields, date intervals, rule flags, labels, manipulation flags, JD track, sealed output |
-| `tests/test_s5_normalise.py` | 5 tests — canonical skills, unknown skill, hash/seal, structure field changes report hash |
+| `tests/test_s5_normalise.py` | 4 tests — canonical skills, unknown skill, hash/seal, structure field changes report hash |
 | `tests/test_seal.py` | 2 tests — seal roundtrip, deterministic fields |
 | `tests/test_log_chain.py` | 3 tests — append_log chain, verify_chain true, verify_chain detects tampering (skipped without PostgreSQL) |
 

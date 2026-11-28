@@ -64,6 +64,8 @@ python scripts/benchmark.py
 | contrast_min | 1.5 | WCAG contrast threshold |
 | min_ink | 0.02 | Min ink share for NOT_VISIBLE |
 | suspicious_score | 5.0 | Score threshold for SUSPICIOUS |
+| review_threshold | 2.0 | Review threshold for suspicion rating |
+| quarantine_threshold | 5.0 | Quarantine threshold for suspicion rating |
 | audit_rate | 0.05 | Audit sample rate |
 | pipeline_version | 1.0.0 | Pipeline version |
 | rules_version | 1.0.0 | Rules version |
@@ -95,7 +97,7 @@ EGCA WORKING/
 ├── config/              ← config.yaml, taxonomy.yaml
 ├── app/                ← main.py, config.py, schemas.py, db.py, seal.py, pipeline.py, scanner.py
 ├── stages/             ← s1_intake.py, s2_verify/ (rules, render, ocr, verdict), s3_govern.py, s4_structure.py, s5_normalise.py
-├── tests/              ← conftest.py, test_pipeline.py, test_s1_intake.py, test_s2_verify.py, test_s3_govern.py, test_s4_structure.py, test_s5_normalise.py, test_scanner.py, test_seal.py
+├── tests/              ← conftest.py, test_pipeline.py, test_s1_intake.py, test_s2_verify.py, test_s3_govern.py, test_s4_structure.py, test_s5_normalise.py, test_scanner.py, test_seal.py, test_log_chain.py
 ├── scripts/            ← init_db.py, benchmark.py
 ├── .env.example
 ├── pyproject.toml

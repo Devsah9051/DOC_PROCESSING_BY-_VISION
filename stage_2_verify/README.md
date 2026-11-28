@@ -13,6 +13,8 @@ Core verification layer — text extraction, rule scanning, render/ghost-diff/co
 - Match text-layer words to OCR boxes
 - Injection scan
 - Compute verdict: CLEAN / REVIEW / QUARANTINE
+- Compute block_hash per block (Section 4.2 hash chain)
+- Compute clean_artifact_sha256 = clean_hash of all block hashes
 
 ## Submodules
 - `__init__.py` — `verify_pages()` main entry

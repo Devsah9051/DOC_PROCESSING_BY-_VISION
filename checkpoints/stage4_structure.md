@@ -177,5 +177,5 @@ No direct config file dependencies. Uses `SECTION_ALIASES` constant and regex pa
 
 ## Checkpoint Status
 **Status:** OPERATIONAL — spec Section 8 gaps resolved (except 8.7 proposer gate, 8.9 layout/position signals)
-**Last Verified:** 2026-11-28 — All 8 Stage 4 tests pass; 91 total tests pass
+**Last Verified:** 2026-11-28 — All 8 Stage 4 tests pass; 97 total tests pass (94 passed, 3 skipped without PostgreSQL)
 **Next Review:** When Stage 5 normalisation is extended with skill relations

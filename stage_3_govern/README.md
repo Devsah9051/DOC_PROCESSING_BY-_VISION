@@ -9,8 +9,8 @@ Pre-gate and post-gate governance decisions.
 - Final risk tier: CLEAN / REVIEW / QUARANTINE
 
 ## Entry Points
-- `govern_pre(upload_id, sha256, config)` → dict
-- `govern_post(upload_id, sha256, verdict, quarantine_payload)` → dict
+- `govern_pre(upload_id, sha256, config, scan_findings=None)` → dict
+- `govern_post(upload_id, sha256, verdict, quarantine_payload=None, scan_findings=None, cdr_applied=False)` → dict
 
 ## Spec Coverage
 See `checkpoints/stage3_govern.md` for full spec gap analysis.
