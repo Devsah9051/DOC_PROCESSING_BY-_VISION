@@ -29,6 +29,11 @@ def real_db_pool(db_url, monkeypatch):
         with db.pool().connection() as conn:
             _ensure_log_table(conn)
             conn.commit()
+        # Clean slate for each test
+        with db.pool().connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("TRUNCATE TABLE append_only_log CASCADE")
+            conn.commit()
     except Exception:
         pytest.skip("PostgreSQL not available; skipping log chain tests")
 

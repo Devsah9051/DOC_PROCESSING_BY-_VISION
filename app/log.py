@@ -65,6 +65,7 @@ def append_log(
 
     import time
     import json
+    from datetime import datetime, timezone
 
     with db.pool().connection() as conn:
         with conn.cursor() as cur:
@@ -72,11 +73,12 @@ def append_log(
             cur.execute("SELECT pg_advisory_xact_lock(hashtext('egca_log'))")
             _ensure_log_table(conn)
             prev_hash = _get_last_hash(conn)
+            created_at = datetime.now(timezone.utc)
             entry_payload = {
                 "kind": kind,
                 "version_id": version_id,
                 "payload": payload,
-                "created_at": time.time(),
+                "created_at": created_at.isoformat(),
             }
             entry_hash = log_hash(entry_payload)
             cur.execute(
@@ -91,7 +93,7 @@ def append_log(
                     kind,
                     version_id,
                     json.dumps(entry_payload, sort_keys=True),
-                    entry_payload["created_at"],
+                    created_at,
                     signature,
                 ),
             )
@@ -138,16 +140,22 @@ def verify_chain() -> bool:
         with conn.cursor() as cur:
             _ensure_log_table(conn)
             cur.execute(
-                "SELECT entry_hash, prev_hash, kind, version_id, payload_json FROM append_only_log ORDER BY id ASC"
+                "SELECT entry_hash, prev_hash FROM append_only_log ORDER BY id ASC"
             )
             rows = cur.fetchall()
     prev = "0" * 64
-    for entry_hash, prev_hash_db, kind, version_id, payload_json in rows:
+    for entry_hash, prev_hash_db in rows:
         if prev_hash_db != prev:
             return False
-        entry = {"kind": kind, "version_id": version_id, "payload": json.loads(payload_json)}
-        # Recompute hash - need created_at but it's not stored separately; recompute from stored fields
-        # The stored entry_hash should match domain_hash of the entry payload
+        # payload_json IS the serialized entry_payload that was hashed in append_log
+        with db.pool().connection() as conn2:
+            with conn2.cursor() as cur2:
+                cur2.execute(
+                    "SELECT payload_json FROM append_only_log WHERE entry_hash = %s",
+                    (entry_hash,),
+                )
+                row = cur2.fetchone()
+        entry = json.loads(row[0])
         expected = log_hash(entry)
         if expected != entry_hash:
             return False

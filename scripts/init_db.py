@@ -15,15 +15,6 @@ CREATE TABLE IF NOT EXISTS resume_cache (
     PRIMARY KEY (sha256, pipeline_version, rules_version)
 );
 
-CREATE TABLE IF NOT EXISTS governance_audit_log (
-    upload_id TEXT UNIQUE NOT NULL,
-    sha256 TEXT NOT NULL,
-    status TEXT NOT NULL,
-    rules JSONB NOT NULL DEFAULT '[]'::jsonb,
-    quarantine_payload JSONB,
-    ts TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS version_registry (
     version_id TEXT PRIMARY KEY,
     sha256 TEXT NOT NULL,
@@ -91,10 +82,10 @@ CREATE INDEX IF NOT EXISTS idx_append_only_log_version ON append_only_log(versio
 CREATE OR REPLACE VIEW governance_audit_log AS
 SELECT
     id::TEXT AS upload_id,
-    (payload_json->>'sha256') AS sha256,
+    (payload_json::jsonb->>'sha256') AS sha256,
     kind AS status,
-    (payload_json->>'rules')::JSONB AS rules,
-    (payload_json->>'quarantine_payload')::JSONB AS quarantine_payload,
+    (payload_json::jsonb->>'rules')::JSONB AS rules,
+    (payload_json::jsonb->>'quarantine_payload')::JSONB AS quarantine_payload,
     created_at AS ts
 FROM append_only_log
 WHERE kind = 'GATE_DECISION';
